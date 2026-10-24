@@ -105,8 +105,14 @@ export function createGas({ persistFile } = {}) {
     addEditor: (e) => editors.push(e),
   }
   let currentUser = ''
+  const authState = { missing: false }
   const context = vm.createContext({
-    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => {
+        if (authState.missing) throw new Error('SpreadsheetApp.getActiveSpreadsheet을(를) 호출할 수 있는 권한이 없습니다.')
+        return spreadsheet
+      },
+    },
     Session: { getActiveUser: () => ({ getEmail: () => currentUser }) },
     PropertiesService: {
       getScriptProperties: () => ({ getProperty: (k) => props[k] ?? null, setProperty: (k, v) => (props[k] = String(v)) }),
@@ -122,7 +128,19 @@ export function createGas({ persistFile } = {}) {
         return fmt.replace('yyyy', p.year).replace('MM', p.month).replace('dd', p.day).replace('HH', p.hour).replace('mm', p.minute).replace('ss', p.second)
       },
     },
-    HtmlService: {},
+    HtmlService: {
+      createHtmlOutput: (html) => ({ html, setTitle() { return this }, addMetaTag() { return this } }),
+      createHtmlOutputFromFile: (name) => ({ file: name, setTitle() { return this }, addMetaTag() { return this }, setFaviconUrl() { return this } }),
+    },
+    // 테스트에서 missingScopes에 값을 넣으면 "권한 일부만 허용" 상태를 흉내 낸다.
+    ScriptApp: {
+      AuthMode: { FULL: 'FULL' },
+      AuthorizationStatus: { REQUIRED: 'REQUIRED', NOT_REQUIRED: 'NOT_REQUIRED' },
+      getAuthorizationInfo: () => ({
+        getAuthorizationStatus: () => (authState.missing ? 'REQUIRED' : 'NOT_REQUIRED'),
+        getAuthorizationUrl: () => 'https://script.google.com/macros/auth?mock',
+      }),
+    },
   })
   vm.runInContext(CODE, context, { filename: 'Code.js' })
   ScriptDate = vm.runInContext('Date', context)
@@ -141,6 +159,8 @@ export function createGas({ persistFile } = {}) {
   }
 
   return {
+    authState,
+    doGet: () => context.doGet(),
     sheets,
     props,
     editors,

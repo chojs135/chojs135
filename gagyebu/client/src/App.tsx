@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, shiftMonth, thisMonth, type Category, type Me, type MeResponse } from './api'
+import { api, ApiError, shiftMonth, thisMonth, type Category, type Me, type MeResponse } from './api'
 import Setup from './pages/Setup'
 import Dashboard from './pages/Dashboard'
 import Transactions from './pages/Transactions'
@@ -18,7 +18,7 @@ export type Ctx = { me: Me; reloadMe: () => void; categories: Category[]; reload
 
 export default function App() {
   const [me, setMe] = useState<MeResponse | undefined>(undefined)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<ApiError | Error | null>(null)
   const [flash, setFlash] = useState('')
   const [categories, setCategories] = useState<Category[]>([])
   const [tab, setTab] = useState<Tab>('dashboard')
@@ -26,8 +26,11 @@ export default function App() {
 
   const loadMe = useCallback(() => {
     api<MeResponse>('/me')
-      .then(setMe)
-      .catch((e) => setError((e as Error).message))
+      .then((m) => {
+        setError(null)
+        setMe(m)
+      })
+      .catch((e) => setError(e as Error))
   }, [])
   const reloadCategories = useCallback(() => {
     api<Category[]>('/categories').then(setCategories)
@@ -38,7 +41,30 @@ export default function App() {
     if (me?.state === 'ok') reloadCategories()
   }, [me, reloadCategories])
 
-  if (error) return <div className="center error">{error}</div>
+  if (error) {
+    const authUrl = error instanceof ApiError ? error.authUrl : undefined
+    return (
+      <div className="login">
+        <h1>💰 우리집 가계부</h1>
+        <div className="card">
+          <p className="error">{error.message}</p>
+          {authUrl && (
+            <>
+              <p className="small muted">
+                권한 화면에서 <b>모든 항목에 체크</b>하고 허용한 뒤 [다시 시도]를 눌러 주세요. 휴대폰에 구글 계정이 여러 개라면 가계부 구성원으로 등록된 계정을 골라 주세요.
+              </p>
+              <div className="actions">
+                <a className="button-link primary-link" href={authUrl} target="_blank" rel="noreferrer">
+                  🔑 권한 다시 허용하기
+                </a>
+                <button onClick={loadMe}>다시 시도</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
   if (me === undefined) return <div className="center muted">불러오는 중…</div>
   if (me.state !== 'ok') return <Setup me={me} onDone={loadMe} />
 

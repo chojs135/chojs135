@@ -59,7 +59,36 @@ var DEFAULT_CATEGORIES = [
 
 // ---------------------------------------------------------------- 진입점
 
+// appsscript.json의 oauthScopes와 같아야 한다.
+var REQUIRED_SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/userinfo.email'];
+
+/**
+ * 구글 권한 화면에서 항목을 하나씩 고를 수 있어서(부분 동의) 시트 권한을 빼고 허용하면 앱이 동작하지 않는다.
+ * 빠진 권한이 있으면 다시 허용하는 주소를 돌려준다.
+ */
+function missingAuthUrl_() {
+  try {
+    var info = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL, REQUIRED_SCOPES);
+    return info.getAuthorizationStatus() === ScriptApp.AuthorizationStatus.REQUIRED ? info.getAuthorizationUrl() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function authPage_(url) {
+  var html =
+    '<div style="font-family:-apple-system,\'Apple SD Gothic Neo\',\'Malgun Gothic\',sans-serif;max-width:420px;margin:48px auto;padding:0 16px;line-height:1.6">' +
+    '<h2>💰 우리집 가계부</h2>' +
+    '<p>가계부를 쓰려면 <b>구글 시트 접근 권한</b>이 필요해요. 아래 버튼을 눌러 권한 화면에서 <b>모든 항목에 체크</b>하고 허용해 주세요.</p>' +
+    '<p><a href="' + url + '" target="_blank" style="display:inline-block;padding:12px 18px;background:#4f46e5;color:#fff;border-radius:10px;text-decoration:none;font-weight:600">권한 허용하기</a></p>' +
+    '<p style="color:#6b6a66;font-size:14px">허용한 뒤 이 페이지를 새로고침하세요.<br>휴대폰에 구글 계정이 여러 개라면 가계부 구성원으로 등록된 계정을 골라 주세요.</p>' +
+    '</div>';
+  return HtmlService.createHtmlOutput(html).setTitle('우리집 가계부').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
 function doGet() {
+  var authUrl = missingAuthUrl_();
+  if (authUrl) return authPage_(authUrl);
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('우리집 가계부')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
@@ -72,6 +101,10 @@ function api(method, path, bodyJson) {
     var body = bodyJson ? JSON.parse(bodyJson) : {};
     return JSON.stringify({ ok: true, data: route_(method, path, body) });
   } catch (e) {
+    var authUrl = e.status ? null : missingAuthUrl_();
+    if (authUrl) {
+      return JSON.stringify({ ok: false, status: 401, authUrl: authUrl, error: '구글 시트 접근 권한이 빠져 있어요. [권한 다시 허용하기]를 눌러 모든 항목에 체크해 주세요.' });
+    }
     return JSON.stringify({ ok: false, status: e.status || 500, error: e.message || String(e) });
   }
 }

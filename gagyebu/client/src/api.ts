@@ -91,9 +91,12 @@ export type Annual = Summary & {
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** 구글 권한 일부가 빠졌을 때 다시 허용하는 주소 */
+  authUrl?: string
+  constructor(status: number, message: string, authUrl?: string) {
     super(message)
     this.status = status
+    this.authUrl = authUrl
   }
 }
 
@@ -126,8 +129,8 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
   } catch (e) {
     throw new ApiError(0, `서버에 연결하지 못했어요: ${(e as Error).message}`)
   }
-  const res = JSON.parse(raw) as { ok: true; data: T } | { ok: false; status: number; error: string }
-  if (!res.ok) throw new ApiError(res.status, res.error)
+  const res = JSON.parse(raw) as { ok: true; data: T } | { ok: false; status: number; error: string; authUrl?: string }
+  if (!res.ok) throw new ApiError(res.status, res.error, res.authUrl)
   return res.data
 }
 

@@ -8,6 +8,8 @@ import { createGas } from './gas-mock.mjs'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const gas = createGas({ persistFile: process.env.GAS_DEV_DATA ?? path.join(here, '.data.json') })
 const port = Number(process.env.PORT ?? 3002)
+// GAS_DEV_AUTH_MISSING=1 이면 "시트 권한을 빼고 허용한" 사용자처럼 동작한다.
+gas.authState.missing = process.env.GAS_DEV_AUTH_MISSING === '1'
 
 http
   .createServer((req, res) => {

@@ -215,6 +215,16 @@ fail(gas.call('stranger@gmail.com', 'GET', '/analysis-context'), 403)
 fail(gas.call('', 'GET', '/me'), 401)
 fail(gas.call(H, 'GET', '/nope'), 404)
 
+// 9-1. 시트 권한을 빼고 허용한 경우(부분 동의): 권한 페이지와 다시 허용 주소
+assert.equal(gas.doGet().file, 'Index')
+gas.authState.missing = true
+assert.ok(gas.doGet().html.includes('권한 허용하기'))
+const denied = gas.call(W, 'GET', '/me')
+assert.equal(denied.ok, false)
+assert.equal(denied.status, 401)
+assert.equal(denied.authUrl, 'https://script.google.com/macros/auth?mock')
+gas.authState.missing = false
+
 // 10. 중복 찾기: 영수증 ↔ 카드 내역
 {
   const g = createGas()
