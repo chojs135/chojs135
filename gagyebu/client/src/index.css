@@ -267,3 +267,19 @@ details.more > section { margin-bottom: 12px; }
 .row-2 > label { min-width: 0; }
 .row-2 select, .row-2 input { width: 100%; }
 @media (max-width: 520px) { .recurring-form .row-2 { grid-template-columns: 1fr; } }
+/* 관리 */
+.chip-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 4px; scrollbar-width: none; }
+.chip-tabs button { flex: none; border-radius: 999px; padding: 7px 12px; font-size: 14px; white-space: nowrap; }
+.chip-tabs button.active { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+.ledger-kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 12px; }
+.ledger-kpis .card { margin-bottom: 0; }
+.small-kpi { font-size: 17px; }
+.ledger-list { list-style: none; margin: 0 0 8px; padding: 0; }
+.ledger-list li { padding: 10px 0; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+.ledger-list li:hover { background: var(--hover); }
+.ledger-title { display: flex; justify-content: space-between; gap: 8px; }
+.ledger-form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.ledger-form .actions, .ledger-form .error { grid-column: 1 / -1; }
+.ledger-form label > input, .ledger-form label > select { width: 100%; }
+@media (max-width: 520px) { .ledger-form { grid-template-columns: 1fr; } }
+.actions button { white-space: nowrap; }

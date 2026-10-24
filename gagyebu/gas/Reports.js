@@ -178,6 +178,11 @@ function dateLabel_(ymd) {
   return ymd.slice(5, 7) + '.' + ymd.slice(8, 10) + '(' + WEEKDAYS[d.getDay()] + ')';
 }
 
+/** 시트가 날짜로 바꾸지 않는 글자 날짜: 2026년 10월 19일 (보고서 칸은 숫자 서식이라 날짜로 바뀌면 숫자로 보인다) */
+function longDate_(ymd) {
+  return ymd ? Number(ymd.slice(0, 4)) + '년 ' + Number(ymd.slice(5, 7)) + '월 ' + Number(ymd.slice(8, 10)) + '일' : '';
+}
+
 function contentLabel_(t) {
   if (t.merchant && t.description && t.description !== t.merchant) return t.merchant + ' · ' + t.description;
   return t.merchant || t.description || '';
@@ -403,7 +408,7 @@ function buildSettingsTab_(all, cats, members) {
     if (t.type === 'expense') p.amount += t.amount;
     if (t.date > p.last) p.last = t.date;
   });
-  r = g.table(r, 2, '지출 방법', ['지출 방법', '사용 건수', '누적 지출', '최근 사용일'], Object.keys(pay).sort(function (a, b) { return pay[b].count - pay[a].count; }).map(function (k) { return [k, pay[k].count, pay[k].amount, pay[k].last]; }));
+  r = g.table(r, 2, '지출 방법', ['지출 방법', '사용 건수', '누적 지출', '최근 사용일'], Object.keys(pay).sort(function (a, b) { return pay[b].count - pay[a].count; }).map(function (k) { return [k, pay[k].count, pay[k].amount, longDate_(pay[k].last)]; }));
 
   r = g.table(r, 2, '구성원', ['이름', '구글 계정'], members.map(function (m) { return [m.name, m.email]; }));
 
@@ -427,7 +432,7 @@ function orderTabs_() {
   var order = [REPORT_ANNUAL];
   for (var m = 1; m <= 12; m++) order.push(monthTabName_(m));
   order.push(SHEETS.recurring.name);
-  (typeof LEDGER_ORDER !== 'undefined' ? LEDGER_ORDER : []).forEach(function (k) { order.push(SHEETS[k].name); });
+  LEDGER_TYPES.forEach(function (t) { order.push(LEDGERS[t].name); });
   txSheets_()
     .map(function (sh) { return sh.getName(); })
     .sort()
@@ -455,6 +460,7 @@ function rebuildReports_(year) {
   for (var m = 1; m <= 12; m++) buildMonthTab_(year, m, all, cats, members);
   buildAnnualTab_(year, all, cats, members);
   buildSettingsTab_(all, cats, members);
+  ensureLedgerSheets_();
   orderTabs_();
   return { year: year };
 }

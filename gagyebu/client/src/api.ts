@@ -180,3 +180,22 @@ export type RecurringInfo = {
   all: (Recurring & { id: number; last: string })[]
   suggestions: (Recurring & { months: number })[]
 }
+
+export type LedgerField = {
+  key: string
+  type: 'text' | 'money' | 'number' | 'date' | 'day' | 'select' | 'member'
+  options?: string[]
+  required?: boolean
+  primary?: boolean
+  placeholder?: string
+}
+export type LedgerRow = { id: number; _calc?: Record<string, string | number> } & Record<string, string | number | null | undefined | Record<string, string | number>>
+export type LedgerData = {
+  type: string
+  name: string
+  icon: string
+  hint: string
+  fields: LedgerField[]
+  rows: LedgerRow[]
+  summary: { label: string; value: number; strong?: boolean; unit?: string }[]
+}

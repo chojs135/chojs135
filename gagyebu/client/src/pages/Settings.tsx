@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { api, TYPE_LABEL, type Category, type TxType } from '../api'
 import type { Ctx } from '../App'
 import { MODEL_INFO, testApiKey, type AnalysisContext } from '../claude'
-import RecurringManager from '../components/RecurringManager'
 
 type Rule = { keyword: string; type: TxType; category: string; subcategory: string }
 
@@ -362,7 +361,6 @@ export default function Settings({ ctx }: { ctx: Ctx }) {
           📗 구글 시트 열기
         </a>
       </section>
-      <RecurringManager ctx={ctx} />
       <SheetReports ctx={ctx} />
       <Members ctx={ctx} />
       <ApiKey ctx={ctx} />

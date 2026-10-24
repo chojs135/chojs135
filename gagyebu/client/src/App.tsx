@@ -5,12 +5,14 @@ import Dashboard from './pages/Dashboard'
 import Transactions from './pages/Transactions'
 import Upload from './pages/Upload'
 import Settings from './pages/Settings'
+import Manage from './pages/Manage'
 
-type Tab = 'dashboard' | 'transactions' | 'upload' | 'settings'
+type Tab = 'dashboard' | 'transactions' | 'upload' | 'manage' | 'settings'
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'dashboard', label: '대시보드', icon: '📊' },
   { id: 'transactions', label: '내역', icon: '📋' },
   { id: 'upload', label: '올리기', icon: '📤' },
+  { id: 'manage', label: '관리', icon: '📒' },
   { id: 'settings', label: '설정', icon: '⚙️' },
 ]
 
@@ -20,6 +22,7 @@ export default function App() {
   const [me, setMe] = useState<MeResponse | undefined>(undefined)
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [flash, setFlash] = useState('')
+  const [manageSub, setManageSub] = useState<string | undefined>()
   const [categories, setCategories] = useState<Category[]>([])
   const [tab, setTab] = useState<Tab>('dashboard')
   const [month, setMonth] = useState(thisMonth())
@@ -113,8 +116,8 @@ export default function App() {
             ctx={ctx}
             goUpload={() => setTab('upload')}
             goRecurring={() => {
-              setTab('settings')
-              setTimeout(() => document.getElementById('recurring')?.scrollIntoView({ behavior: 'smooth' }), 300)
+              setManageSub('recurring')
+              setTab('manage')
             }}
           />
         )}
@@ -136,6 +139,7 @@ export default function App() {
             }}
           />
         )}
+        {tab === 'manage' && <Manage key={manageSub} ctx={ctx} initial={manageSub} />}
         {tab === 'settings' && <Settings ctx={ctx} />}
       </main>
     </div>

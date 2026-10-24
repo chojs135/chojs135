@@ -123,7 +123,7 @@ assert.equal(s.expense, 320000)
 // 구글 시트 보고서 탭 (엑셀 가계부 구성)
 const names = gas.sheets.map((x) => x.name)
 assert.deepEqual(names.slice(0, 13), ['통합시트', '1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'], '보고서 탭이 앞에')
-assert.deepEqual(names.slice(13, 16), ['결제일 관리', '2026 거래내역', '설정'], '결제일 관리 → 연도별 거래내역 → 설정')
+assert.deepEqual(names.slice(13, 22), ['결제일 관리', '자산관리', '예비비', '대출 관리', '카드 관리', '통장관리', '이벤트 관리', '2026 거래내역', '설정'], '결제일 관리 → 관리 탭 → 연도별 거래내역 → 설정')
 assert.ok(!names.includes('거래내역'), '하나짜리 거래내역 탭은 없음')
 const y26 = gas.sheets.find((x) => x.name === '2026 거래내역')
 assert.deepEqual(y26.data[0].slice(0, 10), ['No', '날짜', '구분', '내용', '금액', '대분류', '소분류', '지출 방법', '태그', '사용자'], '엑셀 가계부 열 순서')
@@ -133,6 +133,11 @@ const settingsTab = gas.sheets.find((x) => x.name === '설정')
 assert.ok(settingsTab.find('대분류 / 소분류') && settingsTab.find('지출 방법') && settingsTab.find('월 예산'))
 const [cr] = settingsTab.find('🍚 식비')
 assert.deepEqual(settingsTab.data[cr - 1].slice(1, 7), ['지출', '🍚 식비', '식재료', '편의점/까페', '외식', '배달'])
+for (const tab of ['통합시트', '설정', ...Array.from({ length: 12 }, (_, i) => `${i + 1}월`)]) {
+  const sh = gas.sheets.find((x) => x.name === tab)
+  assert.ok(sh.data.every((r) => (r ?? []).every((v) => !(v instanceof Object && typeof v.getTime === 'function'))), `${tab}: 날짜 값이 들어가면 숫자로 보임`)
+}
+assert.ok(settingsTab.data.every((r) => (r ?? []).every((v) => typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) && (r ?? []).every((v) => !(v instanceof Object && typeof v.getTime === 'function'))), '보고서 탭에 날짜 값(숫자로 보임)이 없어야 함')
 assert.ok(!names.includes('월별요약'))
 const annual = gas.sheets.find((x) => x.name === '통합시트')
 assert.equal(annual.getCharts().length, 1, '월별 차트')
@@ -426,6 +431,8 @@ gas.authState.missing = false
   assert.equal(ok(g.call(U, 'GET', '/rules'))[0].category, '고정지출')
   assert.ok(!g.sheets.some((x) => x.name === '월별요약'))
   assert.ok(sheet('10월').find('이달의 고정지출 내역'))
+  const order = g.sheets.map((x) => x.name)
+  assert.ok(order.indexOf('2025 거래내역') > order.indexOf('이벤트 관리') && order.indexOf('2025 거래내역') < order.indexOf('설정'), '옮긴 뒤 탭 순서 정리')
   // 두 번째 호출에서는 다시 옮기지 않는다
   ok(g.call(U, 'GET', '/transactions'))
   assert.equal(ok(g.call(U, 'GET', '/categories')).length, cats.length)
@@ -533,6 +540,69 @@ gas.authState.missing = false
   ok(g.call(U, 'POST', '/transactions', { date: '2026-09-11', type: 'expense', amount: 33000, category_id: cid('고정지출'), subcategory: '통신비', merchant: '유플러스 인터넷' }))
   const sug = ok(g.call(U, 'GET', '/recurring')).suggestions
   assert.deepEqual(sug.map((x) => [x.name, x.day, x.amount, x.auto]), [['유플러스 인터넷', 11, 33000, true]], 'SKT는 이미 등록돼 있어서 추천하지 않음')
+}
+
+// 13. 관리 탭 (자산·예비비·대출·카드·통장·이벤트) — 오늘은 2026-10-24
+{
+  const g = createGas()
+  const U = 'm@gmail.com'
+  ok(g.call(U, 'POST', '/setup', { name: '민호' }))
+  const cs = ok(g.call(U, 'GET', '/categories'))
+  const cid = (n) => cs.find((c) => c.name === n).id
+  assert.deepEqual(ok(g.call(U, 'GET', '/ledgers')).map((l) => l.name), ['자산관리', '예비비', '대출 관리', '카드 관리', '통장관리', '이벤트 관리'])
+  const names = g.sheets.map((x) => x.name)
+  assert.deepEqual(names.slice(13, 20), ['결제일 관리', '자산관리', '예비비', '대출 관리', '카드 관리', '통장관리', '이벤트 관리'], '엑셀처럼 관리 탭이 시트에')
+  assert.deepEqual(g.sheets.find((x) => x.name === '카드 관리').data[0].slice(0, 4), ['No', '카드사', '카드명', '종류'])
+
+  // 자산: 순자산
+  ok(g.call(U, 'POST', '/ledgers/asset', { 구분: '유동자산', 항목: '파킹통장', 금액: '5,000,000', 명의: '민호' }))
+  ok(g.call(U, 'POST', '/ledgers/asset', { 구분: '부동산', 항목: '아파트', 금액: 400000000, 기준일: '2026-10-01' }))
+  ok(g.call(U, 'POST', '/ledgers/asset', { 구분: '부채', 항목: '주택담보대출', 금액: 250000000 }))
+  fail(g.call(U, 'POST', '/ledgers/asset', { 구분: '이상한구분', 항목: 'x', 금액: 1 }), 400)
+  fail(g.call(U, 'POST', '/ledgers/asset', { 구분: '투자', 금액: 1 }), 400)
+  let v = ok(g.call(U, 'GET', '/ledgers/asset'))
+  assert.deepEqual(v.summary.map((x) => x.value), [405000000, 250000000, 155000000])
+  assert.equal(v.rows.find((r) => r['항목'] === '아파트')['기준일'], '2026-10-01')
+
+  // 예비비
+  ok(g.call(U, 'POST', '/ledgers/reserve', { 분류: '여행자금', '목표 금액': 2000000, '모은 금액': 500000, '쓴 금액': 120000 }))
+  v = ok(g.call(U, 'GET', '/ledgers/reserve'))
+  assert.deepEqual(v.rows[0]._calc, { 잔액: 380000, 달성률: '25%' })
+
+  // 대출: 저축 › 대출상환 내역으로 남은 원금 계산
+  const loan = ok(g.call(U, 'POST', '/ledgers/loan', { 금융기관: '부산은행', 대출명: '중도금대출', 대출원금: 100000000, '금리(%)': 4.2, 납입일: 11 }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-09-11', type: 'saving', amount: 1000000, category_id: cid('저축'), subcategory: '대출상환', merchant: '부산은행 중도금' }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-10-11', type: 'saving', amount: 1500000, category_id: cid('저축'), subcategory: '대출상환', merchant: '중도금대출 상환' }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-10-12', type: 'saving', amount: 999, category_id: cid('저축'), subcategory: '적금', merchant: '부산은행 적금' }))
+  v = ok(g.call(U, 'GET', '/ledgers/loan'))
+  assert.deepEqual(v.rows[0]._calc, { '상환한 원금': 2500000, '남은 원금': 97500000 })
+  assert.equal(v.rows[0]['금리(%)'], 4.2)
+  assert.equal(v.rows[0]['납입일'], 11)
+  fail(g.call(U, 'POST', '/ledgers/loan', { 대출명: 'x', 대출원금: 1, 납입일: 40 }), 400)
+
+  // 카드: 지출 방법으로 이번 달 사용액·전월실적
+  ok(g.call(U, 'POST', '/ledgers/card', { 카드사: '삼성카드', 카드명: '삼성 네이버카드', 종류: '신용', 전월실적: 300000 }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-10-05', type: 'expense', amount: 120000, category_id: cid('식비'), merchant: '이마트', payment_method: '삼성카드(솔)' }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-09-05', type: 'expense', amount: 350000, category_id: cid('식비'), merchant: '코스트코', payment_method: '삼성카드' }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-10-06', type: 'expense', amount: 50000, category_id: cid('식비'), merchant: '외식', payment_method: '신한카드' }))
+  v = ok(g.call(U, 'GET', '/ledgers/card'))
+  assert.deepEqual(v.rows[0]._calc, { '이번 달 사용': 120000, '지난달 사용': 350000, '이번 달 실적': '180,000원 남음' })
+
+  // 통장, 이벤트
+  ok(g.call(U, 'POST', '/ledgers/account', { 은행: '케이뱅크', 통장종류: '입출금', 용도: '생활비', 잔액: 1200000 }))
+  assert.equal(ok(g.call(U, 'GET', '/ledgers/account')).summary[0].value, 1200000)
+  const ev = ok(g.call(U, 'POST', '/ledgers/event', { 내용: '알뜰폰 개통 이벤트', '수령 예정일': '2026-10-01', 상태: '대기', '받을 것': '네이버페이 3만원' }))
+  ok(g.call(U, 'POST', '/ledgers/event', { 내용: '신한카드 계좌변경', '수령 예정일': '2026-12-01', 상태: '대기' }))
+  v = ok(g.call(U, 'GET', '/ledgers/event'))
+  assert.deepEqual(v.summary.map((x) => x.value), [2, 1])
+  // 수정·삭제, 시트 내용
+  ok(g.call(U, 'PUT', `/ledgers/event/${ev.id}`, { 내용: '알뜰폰 개통 이벤트', '수령 예정일': '2026-10-01', 상태: '받음' }))
+  assert.deepEqual(ok(g.call(U, 'GET', '/ledgers/event')).summary.map((x) => x.value), [1, 0])
+  ok(g.call(U, 'DELETE', `/ledgers/loan/${loan.id}`))
+  assert.equal(ok(g.call(U, 'GET', '/ledgers/loan')).rows.length, 0)
+  const evTab = g.sheets.find((x) => x.name === '이벤트 관리')
+  assert.equal(evTab.data[1][1], '알뜰폰 개통 이벤트')
+  fail(g.call(U, 'GET', '/ledgers/nope'), 404)
 }
 
 console.log('✅ gas/Code.js 테스트 모두 통과')

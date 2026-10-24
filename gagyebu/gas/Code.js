@@ -313,6 +313,19 @@ function setCell_(key, rec, col, value) {
  * 예전 버전의 '거래내역' 탭 하나(ID, 날짜, 구분, 금액, 카테고리 … 순서)를
  * 엑셀식 열 순서의 연도별 탭으로 옮긴다. 한 번만 실행된다.
  */
+// 시트 구성(탭 종류·순서)이 바뀐 새 버전이면 처음 한 번 전체를 다시 정리한다.
+var LAYOUT_VERSION = '3';
+
+function ensureLayout_() {
+  var p = props_();
+  if (p.getProperty('LAYOUT_VERSION') === LAYOUT_VERSION) return;
+  withLock_(function () {
+    if (p.getProperty('LAYOUT_VERSION') === LAYOUT_VERSION) return;
+    rebuildReports_();
+    p.setProperty('LAYOUT_VERSION', LAYOUT_VERSION);
+  });
+}
+
 function migrateTxLayout_() {
   var legacy = ss_().getSheetByName('거래내역');
   if (!legacy) return false;
@@ -649,6 +662,7 @@ function route_(method, path, body) {
   var me = requireMember_();
   migrateTxLayout_();
   ensurePreset_();
+  ensureLayout_();
   postRecurring_(false);
   var id = seg[1];
 
@@ -700,6 +714,16 @@ function route_(method, path, body) {
         deleteRows_('rule', read_('rule').filter(function (r) { return String(r['키워드']) === kw; }).map(function (r) { return r._row; }));
         return true;
       });
+
+    case 'GET /ledgers':
+      if (!id) return ledgerList_();
+      return ledgerView_(id);
+    case 'POST /ledgers':
+      return withLock_(function () { return createLedger_(id, body); });
+    case 'PUT /ledgers':
+      return withLock_(function () { return updateLedger_(id, Number(seg[2]), body); });
+    case 'DELETE /ledgers':
+      return withLock_(function () { return deleteLedger_(id, Number(seg[2])); });
 
     case 'GET /recurring':
       return { status: recurringStatus_(q.month), all: recurringItems_().map(stripRow_), suggestions: recurringSuggestions_() };
