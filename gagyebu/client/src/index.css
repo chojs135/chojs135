@@ -263,3 +263,7 @@ details.more > section { margin-bottom: 12px; }
 .recurring-list li.paid .r-name, .recurring-list li.paid .num { color: var(--muted); }
 .recurring-list li.missing .r-status { color: var(--bad); }
 .recurring-form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.month-select { display: flex; gap: 6px; } .month-select select { flex: 1; color: var(--text); }
+.row-2 > label { min-width: 0; }
+.row-2 select, .row-2 input { width: 100%; }
+@media (max-width: 520px) { .recurring-form .row-2 { grid-template-columns: 1fr; } }

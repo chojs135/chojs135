@@ -1,12 +1,38 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, TYPE_LABEL, won, type Recurring, type RecurringInfo, type TxType } from '../api'
+import { api, thisMonth, TYPE_LABEL, won, type Recurring, type RecurringInfo, type TxType } from '../api'
 import type { Ctx } from '../App'
 import { CategorySelect, MemberSelect } from './TxForm'
 
 const EMPTY: Recurring = { name: '', type: 'expense', amount: 0, day: 1, category_id: null, subcategory: '', payment_method: '', member_id: null, auto: true }
+const ymLabel = (ym?: string) => (ym ? `${ym.slice(0, 4)}.${ym.slice(5, 7)}` : '')
+
+/** 년·월 고르기 (YYYY-MM) */
+function MonthPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const now = Number(thisMonth().slice(0, 4))
+  const [y, m] = (value || thisMonth()).split('-')
+  const years = Array.from({ length: 16 }, (_, i) => now - 10 + i)
+  return (
+    <span className="month-select">
+      <select value={y} onChange={(e) => onChange(`${e.target.value}-${m}`)}>
+        {years.map((yy) => (
+          <option key={yy} value={yy}>
+            {yy}년
+          </option>
+        ))}
+      </select>
+      <select value={m} onChange={(e) => onChange(`${y}-${e.target.value}`)}>
+        {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).map((mm) => (
+          <option key={mm} value={mm}>
+            {Number(mm)}월
+          </option>
+        ))}
+      </select>
+    </span>
+  )
+}
 
 function Form({ ctx, initial, onDone, onCancel }: { ctx: Ctx; initial: Recurring; onDone: () => void; onCancel: () => void }) {
-  const [r, setR] = useState<Recurring>(initial)
+  const [r, setR] = useState<Recurring>({ ...initial, start: initial.start || thisMonth() })
   const [error, setError] = useState('')
   const set = <K extends keyof Recurring>(k: K, v: Recurring[K]) => setR((p) => ({ ...p, [k]: v }))
   return (
@@ -62,6 +88,26 @@ function Form({ ctx, initial, onDone, onCancel }: { ctx: Ctx; initial: Recurring
           사용자 <MemberSelect members={ctx.me.members} value={r.member_id} onChange={(v) => set('member_id', v)} />
         </label>
       </div>
+      <div className="row-2">
+        <label>
+          언제부터 <MonthPicker value={r.start ?? ''} onChange={(v) => set('start', v)} />
+        </label>
+        <label>
+          언제까지
+          <span className="month-select">
+            <select value={r.end ? 'until' : 'forever'} onChange={(e) => set('end', e.target.value === 'until' ? r.start || thisMonth() : '')}>
+              <option value="forever">계속</option>
+              <option value="until">끝나는 달 지정</option>
+            </select>
+          </span>
+          {r.end && <MonthPicker value={r.end} onChange={(v) => set('end', v)} />}
+        </label>
+      </div>
+      {r.auto && (r.start ?? '') < thisMonth() && (
+        <p className="small notice">
+          📅 {ymLabel(r.start)}부터 지금까지의 결제가 자동으로 채워져요. 이미 내역에 있는 달은 건너뛰어요.
+        </p>
+      )}
       <label className="check">
         <input type="checkbox" checked={r.auto} onChange={(e) => set('auto', e.target.checked)} />
         금액이 매달 같아요 → 결제일에 자동으로 기록 (관리비·가스비처럼 달라지면 끄세요. 고지서를 올리면 '나감'으로 표시돼요)
@@ -97,9 +143,9 @@ export default function RecurringManager({ ctx }: { ctx: Ctx }) {
     <section className="card" id="recurring">
       <h3>📅 정기결제 (결제일 관리)</h3>
       <p className="small muted">매달 나가는 돈을 등록해 두면 결제일이 지나면 자동으로 그 달 내역에 들어가요. 구글 시트의 "결제일 관리" 탭과 같은 목록이에요.</p>
-      {info.status.items.length > 0 && (
+      {info.all.length > 0 && (
         <ul className="recurring-list">
-          {info.status.items.map((i) => (
+          {[...info.all].sort((a, b) => a.day - b.day).map((i) => (
             <li key={i.id}>
               <span className="r-day">{i.day === 31 ? '말일' : `${i.day}일`}</span>
               <span className="r-name">
@@ -107,7 +153,8 @@ export default function RecurringManager({ ctx }: { ctx: Ctx }) {
                 <span className="muted small">
                   {TYPE_LABEL[i.type]} · {catName(i.category_id)}
                   {i.subcategory && ` › ${i.subcategory}`}
-                  {i.payment_method && ` · ${i.payment_method}`} · {i.auto ? '자동 기록' : '금액 변동(기록 안 함)'}
+                  {i.payment_method && ` · ${i.payment_method}`} · {i.auto ? '자동 기록' : '금액 변동(기록 안 함)'} · {ymLabel(i.start)}부터
+                  {i.end ? ` ${ymLabel(i.end)}까지${i.end < thisMonth() ? ' (끝남)' : ''}` : ''}
                 </span>
               </span>
               <span className="num">{won(i.amount)}</span>

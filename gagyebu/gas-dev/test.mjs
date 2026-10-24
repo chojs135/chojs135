@@ -476,6 +476,23 @@ gas.authState.missing = false
   const [fr, fc] = oct.find('이달의 고정지출 내역')
   assert.ok(oct.data.slice(fr).some((r) => r[fc + 1] === '넷플릭스 · 정기결제'))
 
+  // 시작 연·월을 작년으로: 그 달부터 지금까지 채움, 끝나는 달 이후는 안 넣음
+  const ins = ok(g.call(U, 'POST', '/recurring', { ...base, name: '운전자보험', amount: 25000, day: 5, subcategory: '보험료', start: '2025-11', end: '2026-08' }))
+  let ins_ = ok(g.call(U, 'GET', '/transactions?q=' + encodeURIComponent('운전자보험'))).map((t) => t.date).sort()
+  assert.equal(ins_.length, 10)
+  assert.equal(ins_[0], '2025-11-05')
+  assert.equal(ins_.at(-1), '2026-08-05')
+  // 시작을 더 앞으로 당기면 빠진 달만 채움(중복 없음)
+  ok(g.call(U, 'PUT', `/recurring/${ins.id}`, { ...base, name: '운전자보험', amount: 25000, day: 5, subcategory: '보험료', start: '2025-09', end: '2026-08' }))
+  ins_ = ok(g.call(U, 'GET', '/transactions?q=' + encodeURIComponent('운전자보험'))).map((t) => t.date).sort()
+  assert.equal(ins_.length, 12)
+  assert.equal(ins_[0], '2025-09-05')
+  assert.equal(new Set(ins_).size, 12)
+  fail(g.call(U, 'POST', '/recurring', { ...base, name: 'x', amount: 1, day: 1, start: '2026-05', end: '2026-01' }), 400)
+  const insItem = ok(g.call(U, 'GET', '/recurring?month=2026-08')).status.items.find((i) => i.name === '운전자보험')
+  assert.deepEqual([insItem.start, insItem.end], ['2025-09', '2026-08'])
+  assert.ok(!ok(g.call(U, 'GET', '/recurring?month=2026-10')).status.items.some((i) => i.name === '운전자보험'), '끝난 정기결제는 이번 달 목록에 없음')
+
   // 수정·삭제
   ok(g.call(U, 'PUT', `/recurring/${nf.id}`, { ...base, name: '넷플릭스', amount: 13500, day: 3, subcategory: '구독료' }))
   assert.equal(ok(g.call(U, 'GET', '/recurring')).status.items.find((i) => i.name === '넷플릭스').amount, 13500)

@@ -575,7 +575,7 @@ function route_(method, path, body) {
       });
 
     case 'GET /recurring':
-      return { status: recurringStatus_(q.month), suggestions: recurringSuggestions_() };
+      return { status: recurringStatus_(q.month), all: recurringItems_().map(stripRow_), suggestions: recurringSuggestions_() };
     case 'POST /recurring':
       return withLock_(function () { return createRecurring_(body); });
     case 'PUT /recurring':

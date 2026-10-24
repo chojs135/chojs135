@@ -8,7 +8,8 @@
  * 카드 내역을 나중에 올려도 자동 기록한 결제는 중복 찾기에 걸려 두 번 세지 않는다.
  */
 
-var RECURRING_MAX_CATCHUP = 24;
+// 시작 달을 과거로 잡으면 그 달부터 채운다(최대 10년).
+var RECURRING_MAX_CATCHUP = 120;
 
 function ymOf_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, tz_(), 'yyyy-MM');
@@ -77,11 +78,12 @@ function validateRecurring_(b) {
   if (!TYPE_KO[b.type]) throw httpError_(400, '구분이 올바르지 않습니다.');
   if (!(Number(b.day) >= 1 && Number(b.day) <= 31)) throw httpError_(400, '결제일은 1~31일 중에서 골라 주세요.');
   if (b.auto && !(Number(b.amount) > 0)) throw httpError_(400, '자동으로 기록하려면 금액이 필요해요.');
+  if (b.end && ymOf_(b.end) && ymOf_(b.start) && ymOf_(b.end) < ymOf_(b.start)) throw httpError_(400, '끝나는 달이 시작하는 달보다 빨라요.');
 }
 
 function createRecurring_(b) {
   validateRecurring_(b);
-  var it = Object.assign({}, b, { id: nextId_(read_('recurring')), start: ymOf_(b.start) || Utilities.formatDate(new Date(), tz_(), 'yyyy-MM') });
+  var it = Object.assign({}, b, { id: nextId_(read_('recurring')), start: ymOf_(b.start) || Utilities.formatDate(new Date(), tz_(), 'yyyy-MM'), end: ymOf_(b.end) });
   append_('recurring', [recurringRow_(it, categories_(), members_(), '')]);
   postRecurring_(true);
   return { id: it.id };
@@ -91,8 +93,10 @@ function updateRecurring_(id, b) {
   validateRecurring_(b);
   var cur = recurringItems_().filter(function (x) { return x.id === id; })[0];
   if (!cur) throw httpError_(404, '정기결제를 찾을 수 없어요.');
-  var it = Object.assign({}, b, { id: id, start: ymOf_(b.start) || cur.start });
-  writeRow_('recurring', cur._row, recurringRow_(it, categories_(), members_(), cur.last));
+  var it = Object.assign({}, b, { id: id, start: ymOf_(b.start) || cur.start, end: ymOf_(b.end) });
+  // 시작 달을 바꾸면 새 시작 달부터 다시 확인한다(이미 기록된 달은 건너뜀).
+  var last = it.start !== cur.start ? '' : cur.last;
+  writeRow_('recurring', cur._row, recurringRow_(it, categories_(), members_(), last));
   postRecurring_(true);
   return true;
 }

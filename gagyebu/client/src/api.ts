@@ -176,5 +176,7 @@ export type RecurringItem = Recurring & {
 }
 export type RecurringInfo = {
   status: { month: string; items: RecurringItem[]; total: number; paid: number; remaining: number }
+  /** 끝났거나 아직 시작 전인 것까지 전체 */
+  all: (Recurring & { id: number; last: string })[]
   suggestions: (Recurring & { months: number })[]
 }
