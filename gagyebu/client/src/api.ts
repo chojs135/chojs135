@@ -149,3 +149,32 @@ export function shiftMonth(month: string, delta: number) {
   const d = new Date(y, m - 1 + delta, 1)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
+
+export type Recurring = {
+  id?: number
+  name: string
+  type: TxType
+  amount: number
+  day: number
+  category_id: number | null
+  subcategory: string
+  payment_method: string
+  member_id: number | null
+  /** 금액이 매달 같아서 결제일에 자동으로 기록 */
+  auto: boolean
+  start?: string
+  end?: string
+  memo?: string
+}
+export type RecurringItem = Recurring & {
+  id: number
+  last: string
+  due: string
+  status: 'paid' | 'upcoming' | 'missing'
+  paid_amount: number
+  paid_date: string | null
+}
+export type RecurringInfo = {
+  status: { month: string; items: RecurringItem[]; total: number; paid: number; remaining: number }
+  suggestions: (Recurring & { months: number })[]
+}

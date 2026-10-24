@@ -406,4 +406,91 @@ gas.authState.missing = false
   assert.equal(ok(g.call(U, 'GET', '/categories')).length, cats.length)
 }
 
+// 12. 정기결제 (결제일 관리) — 오늘은 2026-10-24
+{
+  const g = createGas()
+  const U = 'r@gmail.com'
+  ok(g.call(U, 'POST', '/setup', { name: '민호' }))
+  const cs = ok(g.call(U, 'GET', '/categories'))
+  const cid = (n) => cs.find((c) => c.name === n).id
+  const me = ok(g.call(U, 'GET', '/me')).user.id
+  const base = { type: 'expense', category_id: cid('고정지출'), payment_method: '네이버페이', member_id: null, auto: true }
+
+  // 8월부터 매달 3일 넷플릭스 → 8·9·10월이 바로 기록됨
+  const nf = ok(g.call(U, 'POST', '/recurring', { ...base, name: '넷플릭스', amount: 17000, day: 3, subcategory: '구독료', start: '2026-08' }))
+  let list = ok(g.call(U, 'GET', '/transactions?q=' + encodeURIComponent('넷플릭스')))
+  assert.deepEqual(list.map((t) => t.date).sort(), ['2026-08-03', '2026-09-03', '2026-10-03'])
+  assert.ok(list.every((t) => t.source === 'recurring' && t.fixed && t.recurring_id === nf.id && t.payment_method === '네이버페이'))
+  // 이미 이번 달에 직접 입력해 둔 결제를 등록하면 또 넣지 않는다
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-10-09', type: 'expense', amount: 89000, category_id: cid('고정지출'), subcategory: '통신비', merchant: 'SKT 통신요금' }))
+  ok(g.call(U, 'POST', '/recurring', { ...base, name: 'SKT', amount: 89000, day: 9, subcategory: '통신비' }))
+  assert.equal(ok(g.call(U, 'GET', '/transactions?month=2026-10&q=SKT')).length, 1, '중복 자동 기록 없음')
+  assert.equal(g.sheets.find((x) => x.name === '결제일 관리').data.find((r) => r[1] === 'SKT')[12], '2026-10', '그 달은 처리한 것으로')
+  // 이번 달 28일 월세는 아직 기록 안 됨, 31일 결제는 말일로
+  ok(g.call(U, 'POST', '/recurring', { ...base, name: '월세', amount: 500000, day: 28, subcategory: '주거비', member_id: me }))
+  assert.equal(ok(g.call(U, 'GET', '/transactions?q=' + encodeURIComponent('월세'))).length, 0)
+  ok(g.call(U, 'POST', '/recurring', { ...base, name: '적금', type: 'saving', category_id: cid('저축'), subcategory: '적금', amount: 300000, day: 31, start: '2026-09' }))
+  assert.deepEqual(ok(g.call(U, 'GET', '/transactions?q=' + encodeURIComponent('적금'))).map((t) => t.date), ['2026-09-30'])
+  // 금액이 달라지는 관리비: 자동 기록하지 않고 예정으로만
+  ok(g.call(U, 'POST', '/recurring', { ...base, name: '아파트 관리비', amount: 300000, day: 25, subcategory: '관리비', auto: false }))
+  fail(g.call(U, 'POST', '/recurring', { ...base, name: '빈 금액', amount: 0, day: 5 }), 400)
+
+  let st = ok(g.call(U, 'GET', '/recurring?month=2026-10')).status
+  const byName = (n) => st.items.find((i) => i.name === n)
+  assert.equal(byName('넷플릭스').status, 'paid')
+  assert.equal(byName('월세').status, 'upcoming')
+  assert.equal(byName('아파트 관리비').status, 'upcoming')
+  assert.equal(byName('적금').status, 'upcoming', '10/31')
+  assert.deepEqual(st.items.map((i) => i.day), [3, 9, 25, 28, 31], '결제일 순')
+  assert.equal(st.items.find((i) => i.name === 'SKT').status, 'paid')
+  assert.equal(st.paid, 17000 + 89000)
+  assert.equal(st.remaining, 500000 + 300000 + 300000)
+  // 관리비 고지서가 올라오면 '나감'
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-10-25', type: 'expense', amount: 312000, category_id: cid('고정지출'), subcategory: '관리비', merchant: '래미안 관리비' }))
+  st = ok(g.call(U, 'GET', '/recurring?month=2026-10')).status
+  assert.equal(byName('아파트 관리비').status, 'paid')
+  assert.equal(byName('아파트 관리비').paid_amount, 312000)
+
+  // 자동 기록을 지워도 다시 넣지 않는다
+  const sep = list.find((t) => t.date === '2026-09-03')
+  ok(g.call(U, 'DELETE', `/transactions/${sep.id}`))
+  g.props.RECURRING_CHECKED = ''
+  ok(g.call(U, 'GET', '/me'))
+  ok(g.call(U, 'GET', '/categories'))
+  assert.equal(ok(g.call(U, 'GET', '/transactions?q=' + encodeURIComponent('넷플릭스'))).length, 2)
+
+  // 카드 내역에 같은 넷플릭스 결제가 있으면 중복으로 빠지고 결제수단은 유지
+  const prepared = ok(g.call(U, 'POST', '/uploads/prepare', { extraction: { document_type: '카드', summary: '', transactions: [
+    { date: '2026-10-04', type: 'expense', amount: 17000, merchant: 'NETFLIX.COM 넷플릭스', description: '', category: '고정지출', subcategory: '구독료', payment_method: '삼성카드', fixed: true, source_file: 'c.pdf', confidence: 0.9, note: '' },
+  ] } })).items
+  assert.equal(prepared[0].duplicate.level, 'strong')
+
+  // 시트: 결제일 관리 탭이 12월 뒤에
+  const names = g.sheets.map((x) => x.name)
+  assert.equal(names[13], '결제일 관리')
+  const rec = g.sheets.find((x) => x.name === '결제일 관리')
+  assert.deepEqual(rec.data[0].slice(0, 5), ['ID', '내용', '구분', '금액', '결제일'])
+  assert.equal(rec.data.find((r) => r[1] === '넷플릭스')[12], '2026-10', '마지막 기록')
+  // 10월 탭 고정지출 내역에 자동 기록이 보임
+  const oct = g.sheets.find((x) => x.name === '10월')
+  const [fr, fc] = oct.find('이달의 고정지출 내역')
+  assert.ok(oct.data.slice(fr).some((r) => r[fc + 1] === '넷플릭스 · 정기결제'))
+
+  // 수정·삭제
+  ok(g.call(U, 'PUT', `/recurring/${nf.id}`, { ...base, name: '넷플릭스', amount: 13500, day: 3, subcategory: '구독료' }))
+  assert.equal(ok(g.call(U, 'GET', '/recurring')).status.items.find((i) => i.name === '넷플릭스').amount, 13500)
+  ok(g.call(U, 'DELETE', `/recurring/${nf.id}`))
+  assert.ok(!ok(g.call(U, 'GET', '/recurring')).status.items.some((i) => i.name === '넷플릭스'))
+  assert.equal(ok(g.call(U, 'GET', '/transactions?q=' + encodeURIComponent('넷플릭스'))).length, 2, '이미 기록된 내역은 남김')
+
+  // 추천: 두 달 이상 반복된 고정지출
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-08-09', type: 'expense', amount: 89000, category_id: cid('고정지출'), subcategory: '통신비', merchant: 'SKT 통신요금' }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-09-09', type: 'expense', amount: 89000, category_id: cid('고정지출'), subcategory: '통신비', merchant: 'SKT 통신요금' }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-09-15', type: 'expense', amount: 50000, category_id: cid('식비'), subcategory: '외식', merchant: '한 번만' }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-08-11', type: 'expense', amount: 33000, category_id: cid('고정지출'), subcategory: '통신비', merchant: '유플러스 인터넷' }))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-09-11', type: 'expense', amount: 33000, category_id: cid('고정지출'), subcategory: '통신비', merchant: '유플러스 인터넷' }))
+  const sug = ok(g.call(U, 'GET', '/recurring')).suggestions
+  assert.deepEqual(sug.map((x) => [x.name, x.day, x.amount, x.auto]), [['유플러스 인터넷', 11, 33000, true]], 'SKT는 이미 등록돼 있어서 추천하지 않음')
+}
+
 console.log('✅ gas/Code.js 테스트 모두 통과')

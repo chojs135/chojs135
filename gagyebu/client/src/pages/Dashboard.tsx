@@ -3,6 +3,7 @@ import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAx
 import { api, shortWon, today, won, type Annual, type AnnualRow, type Category, type Stats } from '../api'
 import type { Ctx } from '../App'
 import Donut from '../components/Donut'
+import RecurringCard from '../components/RecurringCard'
 import { categorySlices, type Slice } from '../components/slices'
 
 /** 수입이 어디로 갔나: 지출 / 저축 / 남은 돈 */
@@ -82,7 +83,7 @@ function Calendar({ s }: { s: Stats }) {
   )
 }
 
-function Monthly({ s, goUpload, order }: { s: Stats; goUpload: () => void; order: number[] }) {
+function Monthly({ s, goUpload, goRecurring, order }: { s: Stats; goUpload: () => void; goRecurring: () => void; order: number[] }) {
   const maxCat = Math.max(1, ...s.byCategory.map((c) => Math.max(c.amount, c.budget ?? 0)))
   const trend = s.trend.map((t) => ({ ...t, label: `${Number(t.month.slice(5))}월` }))
   const variable = s.expense - s.fixedExpense
@@ -156,6 +157,8 @@ function Monthly({ s, goUpload, order }: { s: Stats; goUpload: () => void; order
           </ul>
         </section>
       )}
+
+      <RecurringCard month={s.month} onManage={goRecurring} />
 
       <Calendar s={s} />
 
@@ -409,7 +412,7 @@ function Yearly({ a, categories, order }: { a: Annual; categories: Category[]; o
   )
 }
 
-export default function Dashboard({ ctx, goUpload }: { ctx: Ctx; goUpload: () => void }) {
+export default function Dashboard({ ctx, goUpload, goRecurring }: { ctx: Ctx; goUpload: () => void; goRecurring: () => void }) {
   const [view, setView] = useState<'month' | 'year'>('month')
   // '' = 우리 전체, 'shared' = 공동, 그 외 = 구성원 id
   const [who, setWho] = useState('')
@@ -450,7 +453,7 @@ export default function Dashboard({ ctx, goUpload }: { ctx: Ctx; goUpload: () =>
           </button>
         </div>
       )}
-      {view === 'month' && (s ? <Monthly s={s} goUpload={goUpload} order={order} /> : <div className="muted">불러오는 중…</div>)}
+      {view === 'month' && (s ? <Monthly s={s} goUpload={goUpload} goRecurring={goRecurring} order={order} /> : <div className="muted">불러오는 중…</div>)}
       {view === 'year' && (a ? <Yearly a={a} categories={ctx.categories} order={order} /> : <div className="muted">불러오는 중…</div>)}
     </div>
   )

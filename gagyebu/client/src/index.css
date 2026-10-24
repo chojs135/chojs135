@@ -254,3 +254,12 @@ details.more > summary::-webkit-details-marker { display: none; }
 details.more > summary::before { content: '▸ '; }
 details.more[open] > summary::before { content: '▾ '; }
 details.more > section { margin-bottom: 12px; }
+/* 정기결제 */
+.recurring-list { list-style: none; margin: 0; padding: 0; }
+.recurring-list li { display: grid; grid-template-columns: 44px 1fr auto auto; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.recurring-list li:last-child { border-bottom: none; }
+.recurring-list .r-day { color: var(--muted); font-variant-numeric: tabular-nums; }
+.recurring-list .r-name { min-width: 0; }
+.recurring-list li.paid .r-name, .recurring-list li.paid .num { color: var(--muted); }
+.recurring-list li.missing .r-status { color: var(--bad); }
+.recurring-form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }

@@ -383,7 +383,7 @@ function orderTabs_() {
   var ss = ss_();
   var order = [REPORT_ANNUAL];
   for (var m = 1; m <= 12; m++) order.push(monthTabName_(m));
-  ['tx', 'budget', 'cat', 'member', 'rule', 'upload'].forEach(function (k) { order.push(SHEETS[k].name); });
+  ['recurring', 'tx', 'budget', 'cat', 'member', 'rule', 'upload'].forEach(function (k) { order.push(SHEETS[k].name); });
   order.forEach(function (name, i) {
     var sh = ss.getSheetByName(name);
     if (!sh) return;

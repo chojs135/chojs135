@@ -10,13 +10,18 @@
 var SHEETS = {
   tx: {
     name: '거래내역',
-    headers: ['ID', '날짜', '구분', '금액', '카테고리', '세부항목', '가맹점', '내용', '결제수단', '사용자', '고정', '태그', '메모', '입력방식', '업로드ID', '입력자', '입력일시', '수정일시'],
+    // 열은 뒤에만 덧붙인다(이미 쓰고 있는 시트와 호환).
+    headers: ['ID', '날짜', '구분', '금액', '카테고리', '세부항목', '가맹점', '내용', '결제수단', '사용자', '고정', '태그', '메모', '입력방식', '업로드ID', '입력자', '입력일시', '수정일시', '정기ID'],
   },
   cat: { name: '카테고리', headers: ['ID', '구분', '이름', '아이콘', '색', '세부항목', '순서'] },
   budget: { name: '예산', headers: ['카테고리', '월 예산'] },
   rule: { name: '자동분류규칙', headers: ['키워드', '구분', '카테고리', '세부항목', '수정일시'] },
   member: { name: '구성원', headers: ['ID', '이메일', '이름', '추가일시'] },
   upload: { name: '업로드기록', headers: ['ID', '일시', '파일', '문서종류', '요약', '올린사람', '저장건수'] },
+  recurring: {
+    name: '결제일 관리',
+    headers: ['ID', '내용', '구분', '금액', '결제일', '대분류', '소분류', '결제수단', '사용자', '자동기록', '시작월', '종료월', '마지막 기록', '비고'],
+  },
 };
 // 저축은 쓴 돈도 버는 돈도 아니지만 "얼마나 모았나"를 보려고 따로 센다.
 // 이체(카드대금, 내 계좌 간 이동)는 통계에서 완전히 빠진다.
@@ -160,6 +165,13 @@ function sheet_(key) {
       sh.getRange('D:D').setNumberFormat('#,##0');
     }
     if (key === 'budget') sh.getRange('B:B').setNumberFormat('#,##0');
+    if (key === 'recurring') {
+      sh.getRange('D:D').setNumberFormat('#,##0');
+      sh.getRange('K:M').setNumberFormat('@');
+    }
+  } else if (sh.getLastColumn() < def.headers.length) {
+    // 새 버전에서 열이 늘어난 경우 머리줄만 채운다.
+    sh.getRange(1, 1, 1, def.headers.length).setValues([def.headers]).setFontWeight('bold');
   }
   return sh;
 }
@@ -402,7 +414,8 @@ function txFromRow_(r, cats, members) {
     fixed: String(r['고정']) === FIXED,
     tags: splitTags_(r['태그']),
     memo: String(r['메모'] || ''),
-    source: r['입력방식'] === '자동' ? 'upload' : 'manual',
+    source: r['입력방식'] === '자동' ? 'upload' : r['입력방식'] === '정기' ? 'recurring' : 'manual',
+    recurring_id: Number(r['정기ID']) || null,
     upload_id: Number(r['업로드ID']) || null,
     created_by_name: String(r['입력자'] || ''),
     _row: r._row,
@@ -509,6 +522,7 @@ function route_(method, path, body) {
 
   var me = requireMember_();
   ensurePreset_();
+  postRecurring_(false);
   var id = seg[1];
 
   switch (M + ' /' + seg[0]) {
@@ -560,6 +574,15 @@ function route_(method, path, body) {
         return true;
       });
 
+    case 'GET /recurring':
+      return { status: recurringStatus_(q.month), suggestions: recurringSuggestions_() };
+    case 'POST /recurring':
+      return withLock_(function () { return createRecurring_(body); });
+    case 'PUT /recurring':
+      return withLock_(function () { return updateRecurring_(Number(id), body); });
+    case 'DELETE /recurring':
+      return withLock_(function () { return deleteRecurring_(Number(id)); });
+
     case 'POST /members':
       return withLock_(function () { return addMember_(body); });
     case 'PUT /settings':
@@ -605,7 +628,7 @@ function setup_(body) {
     var email = currentEmail_();
     if (!body.name) throw httpError_(400, '이름을 입력해 주세요.');
     seedCategories_();
-    ['tx', 'budget', 'rule', 'upload'].forEach(sheet_);
+    ['tx', 'budget', 'rule', 'upload', 'recurring'].forEach(sheet_);
     append_('member', [{ ID: 1, 이메일: email, 이름: body.name, 추가일시: now_() }]);
     if (body.householdName) props_().setProperty('HOUSEHOLD_NAME', body.householdName);
     if (body.apiKey) props_().setProperty('ANTHROPIC_API_KEY', cleanKey_(body.apiKey));
@@ -672,6 +695,7 @@ function updateCategory_(id, body) {
     // 거래내역/규칙/예산은 카테고리 이름으로 저장되므로 이름을 바꾸면 함께 바꾼다.
     renameIn_('tx', '카테고리', c.name, newName, function (r) { return KO_TYPE[r['구분']] === c.type; });
     renameIn_('rule', '카테고리', c.name, newName, function (r) { return KO_TYPE[r['구분']] === c.type; });
+    renameIn_('recurring', '대분류', c.name, newName, function (r) { return KO_TYPE[r['구분']] === c.type; });
     if (c.type === 'expense') renameIn_('budget', '카테고리', c.name, newName, function () { return true; });
   }
   writeRow_('cat', c._row, {

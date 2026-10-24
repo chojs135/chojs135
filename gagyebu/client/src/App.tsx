@@ -108,7 +108,16 @@ export default function App() {
             ✅ {flash}
           </div>
         )}
-        {tab === 'dashboard' && <Dashboard ctx={ctx} goUpload={() => setTab('upload')} />}
+        {tab === 'dashboard' && (
+          <Dashboard
+            ctx={ctx}
+            goUpload={() => setTab('upload')}
+            goRecurring={() => {
+              setTab('settings')
+              setTimeout(() => document.getElementById('recurring')?.scrollIntoView({ behavior: 'smooth' }), 300)
+            }}
+          />
+        )}
         {tab === 'transactions' && <Transactions ctx={ctx} />}
         {tab === 'upload' && (
           <Upload

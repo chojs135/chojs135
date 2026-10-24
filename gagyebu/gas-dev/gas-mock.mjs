@@ -86,6 +86,9 @@ class Sheet {
   getLastRow() {
     return this.data.length
   }
+  getLastColumn() {
+    return Math.max(0, ...this.data.map((r) => (r ?? []).length))
+  }
   getRange(a, b, c = 1, d = 1) {
     if (typeof a === 'string') return new Range(this, 1, 1, 0, 0) // 'B:B' 같은 열 서식 지정용
     if (a < 1 || b < 1 || c < 1 || d < 1) throw new Error(`잘못된 범위 ${a},${b},${c},${d}`)

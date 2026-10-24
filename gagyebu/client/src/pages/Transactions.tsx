@@ -102,6 +102,7 @@ export default function Transactions({ ctx }: { ctx: Ctx }) {
                         {c ? `${c.name}${t.subcategory ? ` › ${t.subcategory}` : ''}` : '미분류'}
                         {t.payment_method && ` · ${t.payment_method}`} · {memberName(t.member_id)}
                         {t.source === 'upload' && ' · 🤖'}
+                        {t.source === 'recurring' && ' · 📅 정기결제'}
                       </div>
                       {(t.fixed || t.tags.length > 0) && (
                         <div className="badges">
