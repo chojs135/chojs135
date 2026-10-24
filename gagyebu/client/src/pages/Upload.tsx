@@ -8,7 +8,7 @@ type Result = { filenames: string[]; document_type: string; summary: string; ite
 const BEST_MODEL = 'claude-opus-5-5'
 type History = { id: number; filenames: string; doc_type: string; summary: string; created_at: string; created_by_name: string; tx_count: number }
 
-export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: string[], count: number) => void }) {
+export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: string[], count: number, filled: number) => void }) {
   const [files, setFiles] = useState<File[]>([])
   // 검토 화면에서 더 정확한 모델로 다시 분석할 수 있게 마지막 파일을 기억해 둔다.
   const [lastFiles, setLastFiles] = useState<File[]>([])
@@ -48,10 +48,12 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
     setBusy('저장 중…')
     setError('')
     try {
-      await api('/uploads/commit', { body: { items: result.items, filenames: result.filenames, document_type: result.document_type, summary: result.summary } })
+      const r = await api<{ saved: number; filled: number }>('/uploads/commit', {
+        body: { items: result.items, filenames: result.filenames, document_type: result.document_type, summary: result.summary },
+      })
       const saved = result.items.filter((i) => i.include)
       setResult(null)
-      onSaved(saved.map((i) => i.date.slice(0, 7)), saved.length)
+      onSaved(saved.map((i) => i.date.slice(0, 7)), r.saved, r.filled)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -68,6 +70,8 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
     const dates = included.map((i) => i.date).sort()
     const months = [...new Set(dates.map((d) => d.slice(0, 7)))]
     const otherMonth = months.some((m) => m !== ctx.month)
+    const dupStrong = result.items.filter((i) => i.duplicate?.level === 'strong').length
+    const dupWeak = result.items.filter((i) => i.duplicate?.level === 'weak').length
     return (
       <div>
         <div className="card">
@@ -78,6 +82,13 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
               📅 날짜: {dates[0]}
               {dates.length > 1 && dates.at(-1) !== dates[0] ? ` ~ ${dates.at(-1)}` : ''}
               {otherMonth && ` — ${months.map((m) => `${Number(m.slice(5))}월`).join(', ')} 내역으로 저장돼요. 날짜가 틀리면 아래에서 고쳐 주세요.`}
+            </p>
+          )}
+          {(dupStrong > 0 || dupWeak > 0) && (
+            <p className="notice">
+              🔁 {dupStrong > 0 && `이미 가계부에 있는 결제 ${dupStrong}건은 두 번 세지 않도록 빼 두었어요. `}
+              {dupWeak > 0 && `비슷한 내역이 있는 ${dupWeak}건은 확인해 주세요. `}
+              카드 내역의 결제수단은 기존 내역에 채워 넣어요.
             </p>
           )}
           <div className="actions" style={{ marginTop: 4 }}>
@@ -92,7 +103,7 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
           {busy && <p className="small">{busy}</p>}
           {error && <p className="error">{error}</p>}
           <p className="small muted">
-            분류가 틀린 게 있으면 바로 고쳐 주세요. 고친 가맹점은 다음부터 그대로 분류돼요. 중복으로 의심되는 항목은 기본으로 빼 두었어요.
+            분류가 틀린 게 있으면 바로 고쳐 주세요. 고친 가맹점은 다음부터 그대로 분류돼요. 빠진 항목도 체크하면 저장돼요.
           </p>
         </div>
 
@@ -120,6 +131,11 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
                   {it.description}
                   {it.payment_method && ` · ${it.payment_method}`}
                 </div>
+                {it.duplicate && (
+                  <div className={`dup ${it.duplicate.level}`}>
+                    {it.duplicate.level === 'strong' ? '🔁 중복이라 뺐어요' : '🤔 혹시 중복?'} — {it.duplicate.reason}
+                  </div>
+                )}
                 <div className="badges">
                   <button type="button" className={`chip ${it.fixed ? 'on' : ''}`} onClick={() => update(i, { fixed: !it.fixed })}>
                     📌 고정{it.fixed ? ' ✓' : ''}
@@ -131,7 +147,7 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
                   >
                     #반성
                   </button>
-                  {it.duplicate && <span className="badge warn">⚠️ 이미 있는 내역일 수 있음</span>}
+
                   {it.rule_applied && <span className="badge">📌 우리집 규칙 적용</span>}
                   {it.confidence < 0.7 && <span className="badge warn">❓ 확인 필요{it.note ? `: ${it.note}` : ''}</span>}
                 </div>

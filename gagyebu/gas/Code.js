@@ -269,6 +269,7 @@ function txFromRow_(r, cats, members) {
     tags: splitTags_(r['태그']),
     memo: String(r['메모'] || ''),
     source: r['입력방식'] === '자동' ? 'upload' : 'manual',
+    upload_id: Number(r['업로드ID']) || null,
     created_by_name: String(r['입력자'] || ''),
     _row: r._row,
   };
@@ -695,7 +696,7 @@ function analysisContext_() {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['date', 'type', 'amount', 'merchant', 'description', 'category', 'subcategory', 'payment_method', 'fixed', 'confidence', 'note'],
+            required: ['date', 'type', 'amount', 'merchant', 'description', 'category', 'subcategory', 'payment_method', 'fixed', 'source_file', 'confidence', 'note'],
             properties: {
               date: { type: 'string' },
               type: { type: 'string', enum: ['expense', 'income', 'saving', 'transfer'] },
@@ -706,6 +707,7 @@ function analysisContext_() {
               subcategory: { type: 'string' },
               payment_method: { type: 'string' },
               fixed: { type: 'boolean' },
+              source_file: { type: 'string' },
               confidence: { type: 'number' },
               note: { type: 'string' },
             },
@@ -756,12 +758,14 @@ function systemPrompt_(cats, rules) {
     '- 아파트 관리비 고지서: 항목별(일반관리비, 전기료, 수도료, 난방비, 급탕비, 경비비, 청소비 등)로 나눠 각각 주거/관리비 아래의 알맞은 세부항목으로 기록하세요. 전기·수도·가스/난방이 아닌 공용 항목은 "관리비"로 묶어 하나로 합쳐도 됩니다. 항목 합계는 고지서의 당월 부과액과 같아야 합니다. 날짜는 납부 마감일(없으면 고지 월의 말일)을 씁니다. 연체료·미납액 같은 이전 달 금액은 제외합니다.',
     '- 영수증: 결제 1건을 하나의 거래로 기록합니다. 품목이 여러 카테고리에 걸쳐 크게 나뉘면(예: 마트에서 식료품과 가전) 나눠도 됩니다.',
     '- 급여명세서: 실수령액을 급여 수입 1건으로 기록합니다.',
+    '- 여러 파일을 함께 올렸을 때 같은 결제가 두 곳에 나오면(예: 영수증 사진과 카드 이용내역) 한 번만 기록하고, 날짜·결제수단은 카드/은행 내역을 따릅니다.',
     '',
     '## 형식',
     '- date는 YYYY-MM-DD. 연도가 없으면 문서의 다른 날짜나 오늘(' + today + ')을 기준으로 가장 그럴듯한 연도를 고릅니다.',
     '- amount는 원 단위의 양의 정수입니다(부호는 type으로 표현).',
     '- merchant는 가맹점/상대방 이름을 문서에 적힌 그대로, description은 무엇에 쓴 돈인지 짧은 한국어 설명입니다.',
     '- payment_method는 카드사/은행/결제수단 이름(예: "신한카드", "국민은행 입출금", "현금")이고 모르면 빈 문자열입니다.',
+    '- source_file은 그 거래가 나온 파일 이름입니다([파일: 이름] 표시를 그대로).',
     '- confidence는 분류에 대한 확신도 0~1입니다. 읽기 어렵거나 추측이 섞이면 낮게 주고 note에 이유를 적습니다.',
     '- document_type은 문서 종류(예: "카드 이용내역", "관리비 고지서"), summary는 한두 문장 요약(기간, 건수, 합계)입니다.',
     '- 문서에 거래가 없으면 transactions를 빈 배열로 두고 summary에 이유를 적습니다.',
@@ -773,8 +777,7 @@ function prepareUpload_(body) {
   var ex = body.extraction || {};
   var cats = categories_();
   var rules = rules_();
-  var existing = {};
-  allTx_().forEach(function (t) { existing[t.date + '|' + t.amount + '|' + t.type] = true; });
+  var existing = allTx_();
   var memberId = body.member_id ? Number(body.member_id) : null;
 
   var items = (ex.transactions || []).map(function (t) {
@@ -796,7 +799,6 @@ function prepareUpload_(body) {
       sub = rule.subcategory;
     }
     var amount = Math.round(Math.abs(Number(t.amount) || 0));
-    var dup = !!existing[t.date + '|' + amount + '|' + type];
     return {
       date: t.date,
       type: type,
@@ -812,17 +814,151 @@ function prepareUpload_(body) {
       memo: '',
       confidence: Number(t.confidence) || 0,
       note: t.note || '',
-      duplicate: dup,
+      source_file: t.source_file || '',
+      duplicate: null,
       rule_applied: !!ruleCat,
       ai_category_id: cat ? cat.id : null,
       ai_subcategory: sub,
-      include: !dup,
+      include: true,
     };
   });
+  markDuplicates_(items, existing);
   return { document_type: ex.document_type || '', summary: ex.summary || '', items: items };
 }
 
+// ---------------------------------------------------------------- 중복 찾기
+//
+// 같은 결제가 영수증 사진과 카드 이용내역 등으로 두 번 들어오는 걸 막는다.
+// - 카드 내역은 승인일/매입일 차이로 날짜가 1~3일 다를 수 있다
+// - 가맹점 표기가 다르다("이마트 해운대점" vs "이마트(주)해운대")
+// - 관리비처럼 항목별로 나눠 저장한 것이 카드 내역에서는 합계 한 줄로 나온다(또는 그 반대)
+// - 영수증과 카드 내역을 한꺼번에 올리면 같은 업로드 안에서도 겹친다
+// strong(확실): 기본으로 빼 둔다. weak(비슷함): 표시만 하고 포함해 둔다.
+
+var DUP_DAYS = 3;
+var DUP_GROUP_DAYS = 10;
+
+function dayNum_(ymd) {
+  return Math.round(Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10))) / 86400000);
+}
+
+function normMerchant_(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\(.*?\)|\[.*?\]|주식회사|㈜|\(주\)/g, '')
+    .replace(/[^0-9a-z가-힣]/g, '')
+    .replace(/(점|지점|본점)$/, '');
+}
+
+/** 한쪽 이름이 다른 쪽에 들어 있거나, 앞 3글자가 같으면 같은 가맹점으로 본다. */
+function similarMerchant_(a, b) {
+  var x = normMerchant_(a);
+  var y = normMerchant_(b);
+  if (!x || !y) return false;
+  if (x.indexOf(y) >= 0 || y.indexOf(x) >= 0) return true;
+  return x.length >= 3 && y.length >= 3 && x.slice(0, 3) === y.slice(0, 3);
+}
+
+function describeTx_(t) {
+  return t.date + ' ' + (t.merchant || t.description || '') + ' ' + t.amount.toLocaleString('ko-KR') + '원' + (t.created_by_name ? ' (' + t.created_by_name + ' 입력)' : '');
+}
+
+function markDuplicates_(items, existing) {
+  var used = {};
+
+  // 1) 기존 내역과 1:1 비교
+  items.forEach(function (it) {
+    var best = null;
+    existing.forEach(function (t) {
+      if (used[t.id] || t.type !== it.type || t.amount !== it.amount) return;
+      var gap = Math.abs(dayNum_(t.date) - dayNum_(it.date));
+      if (gap > DUP_DAYS) return;
+      var same = similarMerchant_(t.merchant, it.merchant);
+      var level = same || (gap === 0 && it.amount >= 10000) ? 'strong' : 'weak';
+      var score = (level === 'strong' ? 0 : 10) + gap;
+      if (!best || score < best.score) best = { t: t, level: level, score: score, gap: gap };
+    });
+    if (best) {
+      used[best.t.id] = true;
+      it.duplicate = {
+        level: best.level,
+        of_id: best.t.id,
+        reason: (best.level === 'strong' ? '이미 있는 내역: ' : '비슷한 내역이 있어요: ') + describeTx_(best.t) + (best.gap ? ' · ' + best.gap + '일 차이' : ''),
+      };
+    }
+  });
+
+  // 2) 새 한 줄 = 기존에 항목별로 나눠 저장한 한 업로드의 합계 (예: 관리비 고지서 → 카드 내역의 관리비 한 줄)
+  var groups = {};
+  existing.forEach(function (t) {
+    if (!t.upload_id || t.type !== 'expense' || used[t.id]) return;
+    var g = (groups[t.upload_id] = groups[t.upload_id] || { ids: [], sum: 0, date: t.date, merchant: t.merchant });
+    g.ids.push(t.id);
+    g.sum += t.amount;
+    if (t.date > g.date) g.date = t.date;
+  });
+  items.forEach(function (it) {
+    if (it.duplicate || it.type !== 'expense') return;
+    Object.keys(groups).forEach(function (k) {
+      var g = groups[k];
+      if (it.duplicate || g.ids.length < 2 || g.sum !== it.amount) return;
+      if (Math.abs(dayNum_(g.date) - dayNum_(it.date)) > DUP_GROUP_DAYS) return;
+      g.ids.forEach(function (id) { used[id] = true; });
+      it.duplicate = { level: 'strong', of_id: null, reason: '이미 항목별로 나눠 저장한 내역(' + g.merchant + ' 외 ' + (g.ids.length - 1) + '건)의 합계와 같아요.' };
+    });
+  });
+
+  // 3) 새 항목 여러 개의 합계 = 기존 한 줄 (예: 카드 내역을 먼저 올리고 관리비 고지서를 나중에 올림)
+  var fresh = items.filter(function (it) { return !it.duplicate && it.type === 'expense'; });
+  if (fresh.length >= 2) {
+    var total = fresh.reduce(function (a, it) { return a + it.amount; }, 0);
+    var match = existing.filter(function (t) {
+      return !used[t.id] && t.type === 'expense' && t.amount === total &&
+        fresh.some(function (it) { return Math.abs(dayNum_(t.date) - dayNum_(it.date)) <= DUP_GROUP_DAYS; });
+    })[0];
+    if (match) {
+      used[match.id] = true;
+      fresh.forEach(function (it) {
+        it.duplicate = { level: 'weak', of_id: null, reason: '이번 항목들의 합계가 이미 있는 내역과 같아요: ' + describeTx_(match) + '. 항목별로 보려면 기존 내역을 지우고 이걸 저장하세요.' };
+      });
+    }
+  }
+
+  // 4) 같이 올린 파일끼리 겹침 (AI가 한 번만 쓰라는 지시를 놓친 경우)
+  items.forEach(function (it, i) {
+    if (it.duplicate) return;
+    for (var j = 0; j < i; j++) {
+      var o = items[j];
+      if (o.type !== it.type || o.amount !== it.amount || !it.source_file || o.source_file === it.source_file) continue;
+      if (Math.abs(dayNum_(o.date) - dayNum_(it.date)) > DUP_DAYS) continue;
+      it.duplicate = { level: 'strong', of_id: null, reason: '같이 올린 ' + o.source_file + '에 같은 결제가 있어요 (' + (o.merchant || o.date) + ').' };
+      return;
+    }
+  });
+
+  items.forEach(function (it) { it.include = !(it.duplicate && it.duplicate.level === 'strong'); });
+}
+
+function fillFromSkipped_(skipped) {
+  if (!skipped.length) return 0;
+  var rows = read_('tx');
+  var col = SHEETS.tx.headers.indexOf('결제수단') + 1;
+  var sh = sheet_('tx');
+  var n = 0;
+  skipped.forEach(function (i) {
+    if (!i.payment_method) return;
+    var r = rows.filter(function (x) { return Number(x.ID) === Number(i.duplicate.of_id); })[0];
+    if (r && !r['결제수단']) {
+      sh.getRange(r._row, col).setValue(i.payment_method);
+      n++;
+    }
+  });
+  return n;
+}
+
 function commitUpload_(body, me) {
+  // 중복이라 건너뛴 항목에 결제수단 정보가 있으면 기존 내역의 빈 결제수단을 채운다(영수증 → 카드내역 순으로 올린 경우).
+  var filled = fillFromSkipped_((body.items || []).filter(function (i) { return !i.include && i.duplicate && i.duplicate.of_id; }));
   var items = (body.items || []).filter(function (i) { return i.include; });
   items.forEach(function (i) {
     try {
@@ -847,7 +983,7 @@ function commitUpload_(body, me) {
   });
   append_('upload', [{ ID: uploadId, 일시: stamp, 파일: (body.filenames || []).join(', '), 문서종류: body.document_type || '', 요약: body.summary || '', 올린사람: me.name, 저장건수: items.length }]);
   refreshMonthly_();
-  return { saved: items.length };
+  return { saved: items.length, filled: filled };
 }
 
 // ---------------------------------------------------------------- 통계

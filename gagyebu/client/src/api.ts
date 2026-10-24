@@ -48,7 +48,9 @@ export type Tx = {
 export type DraftItem = Tx & {
   confidence: number
   note: string
-  duplicate: boolean
+  /** strong: 확실한 중복(기본 제외), weak: 비슷한 내역 있음(포함, 표시만) */
+  duplicate: { level: 'strong' | 'weak'; of_id: number | null; reason: string } | null
+  source_file: string
   rule_applied: boolean
   ai_category_id: number | null
   ai_subcategory: string

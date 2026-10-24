@@ -161,7 +161,8 @@ const [a, b, c] = prepared.items
 assert.equal(a.rule_applied, true)
 assert.equal(a.subcategory, '배달', '규칙(배달)이 AI 결과(외식)보다 우선')
 assert.equal(b.amount, 30000, '음수 금액은 양수로')
-assert.equal(b.duplicate, true)
+assert.equal(b.duplicate.level, 'strong')
+assert.ok(b.duplicate.reason.includes('배달의민족'))
 assert.equal(b.include, false, '중복 의심은 기본 제외')
 assert.equal(c.subcategory, '', '없는 세부항목은 비움')
 assert.equal(c.member_id, wifeId)
@@ -213,5 +214,83 @@ fail(gas.call(H, 'PUT', '/settings', { model: 'gpt-4' }), 400)
 fail(gas.call('stranger@gmail.com', 'GET', '/analysis-context'), 403)
 fail(gas.call('', 'GET', '/me'), 401)
 fail(gas.call(H, 'GET', '/nope'), 404)
+
+// 10. 중복 찾기: 영수증 ↔ 카드 내역
+{
+  const g = createGas()
+  const U = 'u@gmail.com'
+  ok(g.call(U, 'POST', '/setup', { name: '나', apiKey: 'sk-ant-test' }))
+  const cs = ok(g.call(U, 'GET', '/categories'))
+  const food = cs.find((c) => c.name === '식비').id
+  const house = cs.find((c) => c.name === '주거/관리비').id
+  const tx = (o) => ({ type: 'expense', category: '식비', subcategory: '', description: '', payment_method: '', fixed: false, confidence: 0.9, note: '', source_file: '', ...o })
+  const prep = (transactions) => ok(g.call(U, 'POST', '/uploads/prepare', { extraction: { document_type: 'x', summary: '', transactions } })).items
+  const commit = (items) => ok(g.call(U, 'POST', '/uploads/commit', { items, filenames: ['f'] }))
+
+  // 영수증 사진 먼저 저장 (결제수단 모름)
+  commit(prep([tx({ date: '2026-08-15', amount: 52300, merchant: '이마트 해운대점' })]))
+  // 관리비 고지서를 항목별로 저장
+  commit(prep([
+    tx({ date: '2026-08-25', amount: 170000, merchant: '래미안 일반관리비', category: '주거/관리비' }),
+    tx({ date: '2026-08-25', amount: 72000, merchant: '래미안 전기료', category: '주거/관리비' }),
+    tx({ date: '2026-08-25', amount: 38000, merchant: '래미안 수도료', category: '주거/관리비' }),
+  ]))
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-08-16', type: 'expense', amount: 4500, category_id: food, merchant: '스타벅스' }))
+
+  // 카드 내역 PDF: 날짜 하루 차이 + 다른 표기, 관리비 합계 한 줄, 같은 금액 다른 가맹점, 진짜 새 결제
+  const card = prep([
+    tx({ date: '2026-08-16', amount: 52300, merchant: '이마트(주)해운대', payment_method: '삼성카드' }),
+    tx({ date: '2026-08-27', amount: 280000, merchant: '래미안아파트관리비', category: '주거/관리비', payment_method: '삼성카드' }),
+    tx({ date: '2026-08-18', amount: 4500, merchant: '메가커피', payment_method: '삼성카드' }),
+    tx({ date: '2026-08-20', amount: 15000, merchant: '김밥천국', payment_method: '삼성카드' }),
+  ])
+  assert.equal(card[0].duplicate.level, 'strong', '하루 차이 + 비슷한 가맹점명 → 확실한 중복')
+  assert.equal(card[0].include, false)
+  assert.ok(card[0].duplicate.reason.includes('1일 차이'))
+  assert.equal(card[1].duplicate.level, 'strong', '관리비 항목 합계와 같은 한 줄')
+  assert.equal(card[1].include, false)
+  assert.ok(card[1].duplicate.reason.includes('합계'))
+  assert.equal(card[2].duplicate.level, 'weak', '같은 금액이지만 다른 가게 → 표시만')
+  assert.equal(card[2].include, true)
+  assert.equal(card[3].duplicate, null)
+
+  // 건너뛴 영수증 내역에 카드 결제수단이 채워진다
+  const r = commit(card)
+  assert.equal(r.saved, 2)
+  assert.equal(r.filled, 1)
+  const emart = ok(g.call(U, 'GET', '/transactions?q=' + encodeURIComponent('이마트')))
+  assert.equal(emart.length, 1)
+  assert.equal(emart[0].payment_method, '삼성카드')
+
+  // 같은 결제가 1:1로만 짝지어진다: 같은 날 같은 금액 두 번 결제했는데 하나만 기록돼 있었으면 하나는 새 결제
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-09-01', type: 'expense', amount: 12000, category_id: food, merchant: '편의점' }))
+  const twice = prep([
+    tx({ date: '2026-09-01', amount: 12000, merchant: '편의점' }),
+    tx({ date: '2026-09-01', amount: 12000, merchant: '편의점' }),
+  ])
+  assert.equal(twice[0].duplicate.level, 'strong')
+  assert.equal(twice[1].duplicate, null)
+
+  // 반대 순서: 카드 내역(합계 한 줄)을 먼저, 고지서(항목별)를 나중에
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-09-26', type: 'expense', amount: 300000, category_id: house, merchant: '아파트관리비 카드결제' }))
+  const bill = prep([
+    tx({ date: '2026-09-25', amount: 200000, merchant: '일반관리비', category: '주거/관리비' }),
+    tx({ date: '2026-09-25', amount: 100000, merchant: '난방비', category: '주거/관리비' }),
+  ])
+  assert.ok(bill.every((i) => i.duplicate?.level === 'weak' && i.include), '합계가 같으면 알려 주되 선택은 사람에게')
+
+  // 한꺼번에 올린 영수증 + 카드 내역
+  const batch = prep([
+    tx({ date: '2026-09-10', amount: 33000, merchant: '교보문고', source_file: '영수증.jpg' }),
+    tx({ date: '2026-09-11', amount: 33000, merchant: '교보문고 광화문', source_file: '카드내역.pdf' }),
+    tx({ date: '2026-09-11', amount: 7000, merchant: '교보문고 광화문', source_file: '카드내역.pdf' }),
+  ])
+  assert.equal(batch[0].duplicate, null)
+  assert.equal(batch[1].duplicate.level, 'strong')
+  assert.ok(batch[1].duplicate.reason.includes('영수증.jpg'))
+  assert.equal(batch[2].duplicate, null)
+
+  assert.ok(ok(g.call(U, 'GET', '/analysis-context')).system.includes('한 번만 기록'))
+}
 
 console.log('✅ gas/Code.js 테스트 모두 통과')

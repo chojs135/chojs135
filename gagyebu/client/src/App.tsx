@@ -87,14 +87,16 @@ export default function App() {
         {tab === 'upload' && (
           <Upload
             ctx={ctx}
-            onSaved={(months, count) => {
+            onSaved={(months, count, filled) => {
               // 저장한 내역이 가장 많은 달로 이동해서 바로 보이게 한다.
               const counts = new Map<string, number>()
               months.forEach((m) => counts.set(m, (counts.get(m) ?? 0) + 1))
               const top = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0]
               if (top) setMonth(top)
               const label = [...counts.keys()].sort().map((m) => `${m.slice(0, 4)}년 ${Number(m.slice(5))}월`).join(', ')
-              setFlash(`${count}건을 저장했어요 (${label}). 구글 시트 '거래내역' 탭에도 바로 들어가 있어요.`)
+              setFlash(
+                `${count}건을 저장했어요${label ? ` (${label})` : ''}.${filled ? ` 기존 내역 ${filled}건에 결제수단을 채웠어요.` : ''} 구글 시트 '거래내역' 탭에도 바로 들어가 있어요.`,
+              )
               setTab('transactions')
             }}
           />
