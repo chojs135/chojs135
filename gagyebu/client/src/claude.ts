@@ -122,6 +122,30 @@ async function fileToBlocks(file: File): Promise<Block[]> {
   throw new Error(`지원하지 않는 파일 형식입니다: ${file.name} (PDF, JPG/PNG/WEBP, CSV, XLSX 가능)`)
 }
 
+/** API 오류를 사람이 읽을 수 있는 말로 바꾼다. 원래 메시지도 함께 보여 줘야 원인을 찾기 쉽다. */
+function explain(e: unknown): Error {
+  if (e instanceof Anthropic.AuthenticationError) {
+    return new Error(`Anthropic이 API 키를 거절했어요(401). 키를 다시 복사해 설정에 넣어 주세요. [${e.message}]`)
+  }
+  if (e instanceof Anthropic.PermissionDeniedError) return new Error(`이 키로는 사용할 수 없는 기능이에요(403). [${e.message}]`)
+  if (e instanceof Anthropic.RateLimitError) return new Error('요청이 많아 잠시 막혔어요. 1분 뒤에 다시 시도해 주세요.')
+  if (e instanceof Anthropic.BadRequestError && /credit|balance/i.test(e.message)) {
+    return new Error('Anthropic 계정 잔액이 부족해요. console.anthropic.com → Billing에서 충전해 주세요.')
+  }
+  if (e instanceof Anthropic.APIError) return new Error(`AI 요청 실패 (${e.status ?? '네트워크'}): ${e.message}`)
+  return e instanceof Error ? e : new Error(String(e))
+}
+
+/** 키가 맞는지만 가볍게 확인한다(모델 목록 조회, 요금 없음). */
+export async function testApiKey(apiKey: string): Promise<void> {
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
+  try {
+    await client.models.list({ limit: 1 })
+  } catch (e) {
+    throw explain(e)
+  }
+}
+
 export async function extractWithClaude(files: File[], ctx: AnalysisContext): Promise<Extraction> {
   const content: Block[] = []
   for (const f of files) content.push(...(await fileToBlocks(f)))
@@ -142,13 +166,7 @@ export async function extractWithClaude(files: File[], ctx: AnalysisContext): Pr
       })
       .finalMessage()
   } catch (e) {
-    if (e instanceof Anthropic.AuthenticationError) throw new Error('Anthropic API 키가 올바르지 않아요. 설정 화면에서 다시 입력해 주세요.')
-    if (e instanceof Anthropic.RateLimitError) throw new Error('요청이 많아 잠시 막혔어요. 1분 뒤에 다시 시도해 주세요.')
-    if (e instanceof Anthropic.BadRequestError && /credit|balance/i.test(e.message)) {
-      throw new Error('Anthropic 계정 잔액이 부족해요. console.anthropic.com에서 충전해 주세요.')
-    }
-    if (e instanceof Anthropic.APIError) throw new Error(`AI 요청 실패 (${e.status ?? '네트워크'}): ${e.message}`)
-    throw e
+    throw explain(e)
   }
 
   if (message.stop_reason === 'refusal') throw new Error('AI가 이 문서의 처리를 거절했어요. 다른 파일로 시도해 주세요.')

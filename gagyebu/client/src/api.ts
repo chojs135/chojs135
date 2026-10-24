@@ -22,6 +22,7 @@ export type MeResponse =
       household: { name: string }
       members: Member[]
       hasApiKey: boolean
+      apiKeyHint: string | null
     }
 export type Me = Extract<MeResponse, { state: 'ok' }>
 

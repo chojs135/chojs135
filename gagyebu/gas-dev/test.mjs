@@ -203,8 +203,9 @@ ok(gas.call(H, 'DELETE', `/rules/${encodeURIComponent('김밥천국')}`))
 assert.ok(!ok(gas.call(H, 'GET', '/rules')).some((r) => r.keyword === '김밥천국'))
 
 // 9. 설정
-ok(gas.call(H, 'PUT', '/settings', { apiKey: ' sk-ant-new ' }))
-assert.equal(gas.props.ANTHROPIC_API_KEY, 'sk-ant-new')
+ok(gas.call(H, 'PUT', '/settings', { apiKey: ' "sk-ant-api03-abcdefghijklmnopqrstuvwxyz\n" ' }))
+assert.equal(gas.props.ANTHROPIC_API_KEY, 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz', '따옴표·공백·줄바꿈 제거')
+assert.equal(ok(gas.call(H, 'GET', '/me')).apiKeyHint, 'sk-ant-api03…wxyz (39자)')
 fail(gas.call('stranger@gmail.com', 'GET', '/analysis-context'), 403)
 fail(gas.call('', 'GET', '/me'), 401)
 fail(gas.call(H, 'GET', '/nope'), 404)

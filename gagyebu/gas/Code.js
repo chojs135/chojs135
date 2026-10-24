@@ -463,7 +463,14 @@ function me_() {
     household: { name: p.getProperty('HOUSEHOLD_NAME') || '우리집 가계부' },
     members: members.map(function (m) { return { id: m.id, name: m.name, email: m.email }; }),
     hasApiKey: !!p.getProperty('ANTHROPIC_API_KEY'),
+    apiKeyHint: keyHint_(p.getProperty('ANTHROPIC_API_KEY')),
   });
+}
+
+/** 저장된 키를 앞 12자 + 뒤 4자만 보여 줘서 콘솔의 키와 맞는지 비교할 수 있게 한다. */
+function keyHint_(key) {
+  if (!key) return null;
+  return key.length > 20 ? key.slice(0, 12) + '…' + key.slice(-4) + ' (' + key.length + '자)' : '(' + key.length + '자 — 너무 짧아요)';
 }
 
 function setup_(body) {
@@ -475,7 +482,7 @@ function setup_(body) {
     ['tx', 'budget', 'rule', 'upload', 'monthly'].forEach(sheet_);
     append_('member', [{ ID: 1, 이메일: email, 이름: body.name, 추가일시: now_() }]);
     if (body.householdName) props_().setProperty('HOUSEHOLD_NAME', body.householdName);
-    if (body.apiKey) props_().setProperty('ANTHROPIC_API_KEY', String(body.apiKey).trim());
+    if (body.apiKey) props_().setProperty('ANTHROPIC_API_KEY', cleanKey_(body.apiKey));
     // 시트를 처음 만들 때 생긴 빈 기본 탭은 정리한다.
     var ours = Object.keys(SHEETS).map(function (k) { return SHEETS[k].name; });
     ss_().getSheets().forEach(function (sh) {
@@ -501,8 +508,12 @@ function addMember_(body) {
   return { shared: shared };
 }
 
+function cleanKey_(k) {
+  return String(k || '').replace(/[\s"'`]/g, '');
+}
+
 function saveSettings_(body) {
-  if (body.apiKey) props_().setProperty('ANTHROPIC_API_KEY', String(body.apiKey).trim());
+  if (body.apiKey) props_().setProperty('ANTHROPIC_API_KEY', cleanKey_(body.apiKey));
   if (body.householdName) props_().setProperty('HOUSEHOLD_NAME', body.householdName);
   return true;
 }

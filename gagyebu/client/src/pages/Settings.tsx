@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, TYPE_LABEL, type Category, type TxType } from '../api'
 import type { Ctx } from '../App'
+import { testApiKey, type AnalysisContext } from '../claude'
 
 type Rule = { keyword: string; type: TxType; category: string; subcategory: string }
 
@@ -208,15 +209,51 @@ function ApiKey({ ctx }: { ctx: Ctx }) {
   return (
     <section className="card">
       <h3>AI 분석 (Anthropic API 키)</h3>
-      <p className="small">{ctx.me.hasApiKey ? '✅ 설정되어 있어요.' : '⚠️ 아직 없어요. 키가 있어야 문서·사진을 자동으로 분석할 수 있어요.'}</p>
+      <p className="small">
+        {ctx.me.hasApiKey ? (
+          <>
+            저장된 키: <code>{ctx.me.apiKeyHint}</code>
+            <br />
+            <span className="muted">console.anthropic.com의 키와 앞뒤 글자가 같은지 비교해 보세요. 정상 키는 sk-ant-api03- 으로 시작하고 100자 정도예요.</span>
+          </>
+        ) : (
+          '⚠️ 아직 없어요. 키가 있어야 문서·사진을 자동으로 분석할 수 있어요.'
+        )}
+      </p>
+      {ctx.me.hasApiKey && (
+        <div className="actions" style={{ marginTop: 0, marginBottom: 8 }}>
+          <button
+            type="button"
+            onClick={async () => {
+              setMsg('확인 중…')
+              try {
+                const c = await api<AnalysisContext>('/analysis-context')
+                await testApiKey(c.apiKey)
+                setMsg('✅ 키가 정상이에요. 이제 올리기에서 분석할 수 있어요.')
+              } catch (e) {
+                setMsg(`❌ ${(e as Error).message}`)
+              }
+            }}
+          >
+            🔌 연결 확인
+          </button>
+        </div>
+      )}
       <form
         className="inline"
         onSubmit={async (e) => {
           e.preventDefault()
           await api('/settings', { method: 'PUT', body: { apiKey: key } })
           setKey('')
-          setMsg('저장했어요.')
           ctx.reloadMe()
+          setMsg('저장했어요. 연결 확인 중…')
+          try {
+            const c = await api<AnalysisContext>('/analysis-context')
+            await testApiKey(c.apiKey)
+            setMsg('✅ 저장했고, 키도 정상이에요.')
+          } catch (err) {
+            setMsg(`❌ 저장은 했지만 키가 거절됐어요: ${(err as Error).message}`)
+          }
         }}
       >
         <input className="grow" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-... (바꿀 때만 입력)" autoComplete="off" required />
