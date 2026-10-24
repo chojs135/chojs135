@@ -5,6 +5,14 @@ import Anthropic from '@anthropic-ai/sdk'
 
 export type AnalysisContext = { apiKey: string; model: string; system: string; schema: Record<string, unknown> }
 
+// 대략적인 비용(원). 사진 영수증 1장 / 카드·은행 내역 PDF 몇 쪽 기준, 환율 1,400원 가정.
+export const MODEL_INFO: Record<string, { label: string; note: string; receipt: string; statement: string }> = {
+  'claude-haiku-5-5': { label: 'Haiku 5.5 (기본·저렴)', note: '가장 싸고 빨라요. 대부분의 영수증·내역서에 충분해요.', receipt: '약 3원', statement: '약 10원' },
+  'claude-sonnet-5-5': { label: 'Sonnet 5.5 (균형)', note: '흐린 사진이나 복잡한 문서에서 더 정확해요.', receipt: '약 50원', statement: '약 150원' },
+  'claude-opus-5-5': { label: 'Opus 5.5 (최고 정확도)', note: '가장 정확하지만 가장 비싸요.', receipt: '약 100원', statement: '약 300원' },
+}
+export const modelLabel = (m: string) => MODEL_INFO[m]?.label ?? m
+
 export type Extraction = {
   document_type: string
   summary: string
@@ -146,7 +154,7 @@ export async function testApiKey(apiKey: string): Promise<void> {
   }
 }
 
-export async function extractWithClaude(files: File[], ctx: AnalysisContext): Promise<Extraction> {
+export async function extractWithClaude(files: File[], ctx: AnalysisContext, model = ctx.model): Promise<Extraction> {
   const content: Block[] = []
   for (const f of files) content.push(...(await fileToBlocks(f)))
   content.push({ type: 'text', text: '위 자료에서 모든 거래를 추출하고 분류해 주세요.' })
@@ -156,10 +164,10 @@ export async function extractWithClaude(files: File[], ctx: AnalysisContext): Pr
   try {
     message = await client.beta.messages
       .stream({
-        model: ctx.model,
+        model,
         max_tokens: 64000,
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
+        // Haiku는 서버 측 대체 모델(fallbacks)을 지원하지 않는다.
+        ...(model.startsWith('claude-haiku') ? {} : { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const }),
         output_config: { effort: 'medium', format: { type: 'json_schema', schema: ctx.schema } },
         system: ctx.system,
         messages: [{ role: 'user', content }],

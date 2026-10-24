@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, TYPE_LABEL, type Category, type TxType } from '../api'
 import type { Ctx } from '../App'
-import { testApiKey, type AnalysisContext } from '../claude'
+import { MODEL_INFO, testApiKey, type AnalysisContext } from '../claude'
 
 type Rule = { keyword: string; type: TxType; category: string; subcategory: string }
 
@@ -264,6 +264,40 @@ function ApiKey({ ctx }: { ctx: Ctx }) {
   )
 }
 
+function ModelPicker({ ctx }: { ctx: Ctx }) {
+  const [msg, setMsg] = useState('')
+  return (
+    <section className="card">
+      <h3>AI 분석 모델</h3>
+      <p className="small muted">비용은 대략적인 추정이에요(사진 영수증 1장 / 카드·은행 내역 PDF 몇 쪽). 검토 화면에서 결과가 이상하면 그때만 Opus로 다시 분석할 수 있어요.</p>
+      <ul className="model-list">
+        {Object.entries(MODEL_INFO).map(([id, m]) => (
+          <li key={id}>
+            <label className="check">
+              <input
+                type="radio"
+                name="model"
+                checked={ctx.me.model === id}
+                onChange={async () => {
+                  await api('/settings', { method: 'PUT', body: { model: id } })
+                  setMsg('바꿨어요.')
+                  ctx.reloadMe()
+                }}
+              />
+              <span>
+                <b>{m.label}</b> <span className="small muted">영수증 {m.receipt} · 내역서 {m.statement}</span>
+                <br />
+                <span className="small muted">{m.note}</span>
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {msg && <p className="small">{msg}</p>}
+    </section>
+  )
+}
+
 export default function Settings({ ctx }: { ctx: Ctx }) {
   return (
     <div className="settings">
@@ -281,6 +315,7 @@ export default function Settings({ ctx }: { ctx: Ctx }) {
       </section>
       <Members ctx={ctx} />
       <ApiKey ctx={ctx} />
+      <ModelPicker ctx={ctx} />
       <Budgets ctx={ctx} />
       <Categories ctx={ctx} />
       <Rules />

@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, won, type DraftItem, type TxType } from '../api'
-import { extractWithClaude, type AnalysisContext } from '../claude'
+import { extractWithClaude, MODEL_INFO, modelLabel, type AnalysisContext } from '../claude'
 import type { Ctx } from '../App'
 import { CategorySelect, MemberSelect } from '../components/TxForm'
 
-type Result = { filenames: string[]; document_type: string; summary: string; items: DraftItem[] }
+type Result = { filenames: string[]; document_type: string; summary: string; items: DraftItem[]; model: string }
+const BEST_MODEL = 'claude-opus-5-5'
 type History = { id: number; filenames: string; doc_type: string; summary: string; created_at: string; created_by_name: string; tx_count: number }
 
-export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void }) {
+export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: string[], count: number) => void }) {
   const [files, setFiles] = useState<File[]>([])
+  // 검토 화면에서 더 정확한 모델로 다시 분석할 수 있게 마지막 파일을 기억해 둔다.
+  const [lastFiles, setLastFiles] = useState<File[]>([])
   const [memberId, setMemberId] = useState<number | null>(ctx.me.user.id)
   const [busy, setBusy] = useState<string | false>(false)
   const [error, setError] = useState('')
@@ -21,15 +24,17 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
     api<History[]>('/uploads').then(setHistory)
   }, [result])
 
-  async function analyze() {
-    setBusy('🤖 AI가 문서를 읽고 있어요… (보통 30초~2분)')
+  async function analyze(target: File[] = files, model?: string) {
     setError('')
     try {
       const context = await api<AnalysisContext>('/analysis-context')
-      const extraction = await extractWithClaude(files, context)
+      const used = model ?? context.model
+      setBusy(`🤖 ${modelLabel(used)}가 문서를 읽고 있어요… (보통 30초~2분)`)
+      const extraction = await extractWithClaude(target, context, used)
       setBusy('분류 결과를 정리하고 있어요…')
-      const prepared = await api<Omit<Result, 'filenames'>>('/uploads/prepare', { body: { extraction, member_id: memberId } })
-      setResult({ ...prepared, filenames: files.map((f) => f.name) })
+      const prepared = await api<Omit<Result, 'filenames' | 'model'>>('/uploads/prepare', { body: { extraction, member_id: memberId } })
+      setResult({ ...prepared, filenames: target.map((f) => f.name), model: used })
+      setLastFiles(target)
       setFiles([])
     } catch (e) {
       setError((e as Error).message)
@@ -44,8 +49,9 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
     setError('')
     try {
       await api('/uploads/commit', { body: { items: result.items, filenames: result.filenames, document_type: result.document_type, summary: result.summary } })
+      const saved = result.items.filter((i) => i.include)
       setResult(null)
-      onSaved()
+      onSaved(saved.map((i) => i.date.slice(0, 7)), saved.length)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -59,11 +65,32 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
   if (result) {
     const included = result.items.filter((i) => i.include)
     const sum = (t: TxType) => included.filter((i) => i.type === t).reduce((a, i) => a + i.amount, 0)
+    const dates = included.map((i) => i.date).sort()
+    const months = [...new Set(dates.map((d) => d.slice(0, 7)))]
+    const otherMonth = months.some((m) => m !== ctx.month)
     return (
       <div>
         <div className="card">
           <h3>🤖 {result.document_type}</h3>
           <p>{result.summary}</p>
+          {dates.length > 0 && (
+            <p className={otherMonth ? 'notice' : 'small muted'}>
+              📅 날짜: {dates[0]}
+              {dates.length > 1 && dates.at(-1) !== dates[0] ? ` ~ ${dates.at(-1)}` : ''}
+              {otherMonth && ` — ${months.map((m) => `${Number(m.slice(5))}월`).join(', ')} 내역으로 저장돼요. 날짜가 틀리면 아래에서 고쳐 주세요.`}
+            </p>
+          )}
+          <div className="actions" style={{ marginTop: 4 }}>
+            <span className="small muted">분석: {modelLabel(result.model)}</span>
+            <span style={{ flex: 1 }} />
+            {result.model !== BEST_MODEL && lastFiles.length > 0 && (
+              <button type="button" disabled={!!busy} onClick={() => analyze(lastFiles, BEST_MODEL)}>
+                🔍 Opus로 다시 분석 ({MODEL_INFO[BEST_MODEL].receipt}~)
+              </button>
+            )}
+          </div>
+          {busy && <p className="small">{busy}</p>}
+          {error && <p className="error">{error}</p>}
           <p className="small muted">
             분류가 틀린 게 있으면 바로 고쳐 주세요. 고친 가맹점은 다음부터 그대로 분류돼요. 중복으로 의심되는 항목은 기본으로 빼 두었어요.
           </p>
@@ -181,7 +208,7 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
             누구의 거래인가요? <MemberSelect members={ctx.me.members} value={memberId} onChange={setMemberId} />
           </label>
           {error && <div className="error">{error}</div>}
-          <button className="primary wide" disabled={!!busy} onClick={analyze}>
+          <button className="primary wide" disabled={!!busy} onClick={() => analyze()}>
             {busy || '🤖 AI로 분석하기'}
           </button>
         </div>

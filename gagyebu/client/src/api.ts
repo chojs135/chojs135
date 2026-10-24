@@ -23,6 +23,7 @@ export type MeResponse =
       members: Member[]
       hasApiKey: boolean
       apiKeyHint: string | null
+      model: string
     }
 export type Me = Extract<MeResponse, { state: 'ok' }>
 

@@ -25,7 +25,9 @@ var TYPE_KO = { expense: '지출', income: '수입', saving: '저축', transfer:
 var KO_TYPE = { 지출: 'expense', 수입: 'income', 저축: 'saving', 이체: 'transfer' };
 var FIXED = '고정';
 var SHARED = '공동';
-var DEFAULT_MODEL = 'claude-opus-5-5';
+// 분석 모델. 기본은 가장 저렴한 Haiku이고, 설정에서 바꾸거나 검토 화면에서 Opus로 다시 분석할 수 있다.
+var MODELS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'];
+var DEFAULT_MODEL = 'claude-haiku-5-5';
 
 var DEFAULT_CATEGORIES = [
   ['expense', '식비', '🍚', '#f97316', ['장보기', '외식', '배달', '카페/간식', '편의점']],
@@ -464,6 +466,7 @@ function me_() {
     members: members.map(function (m) { return { id: m.id, name: m.name, email: m.email }; }),
     hasApiKey: !!p.getProperty('ANTHROPIC_API_KEY'),
     apiKeyHint: keyHint_(p.getProperty('ANTHROPIC_API_KEY')),
+    model: currentModel_(),
   });
 }
 
@@ -508,6 +511,11 @@ function addMember_(body) {
   return { shared: shared };
 }
 
+function currentModel_() {
+  var m = props_().getProperty('CLAUDE_MODEL');
+  return MODELS.indexOf(m) >= 0 ? m : DEFAULT_MODEL;
+}
+
 function cleanKey_(k) {
   return String(k || '').replace(/[\s"'`]/g, '');
 }
@@ -515,6 +523,10 @@ function cleanKey_(k) {
 function saveSettings_(body) {
   if (body.apiKey) props_().setProperty('ANTHROPIC_API_KEY', cleanKey_(body.apiKey));
   if (body.householdName) props_().setProperty('HOUSEHOLD_NAME', body.householdName);
+  if (body.model) {
+    if (MODELS.indexOf(body.model) < 0) throw httpError_(400, '지원하지 않는 모델이에요.');
+    props_().setProperty('CLAUDE_MODEL', body.model);
+  }
   return true;
 }
 
@@ -669,7 +681,7 @@ function analysisContext_() {
   cats.forEach(function (c) { if (names.indexOf(c.name) < 0) names.push(c.name); });
   return {
     apiKey: apiKey,
-    model: props_().getProperty('CLAUDE_MODEL') || DEFAULT_MODEL,
+    model: currentModel_(),
     system: systemPrompt_(cats, rules_()),
     schema: {
       type: 'object',

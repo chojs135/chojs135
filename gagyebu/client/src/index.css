@@ -223,3 +223,8 @@ table.annual th, table.annual td { padding: 6px 6px; border-bottom: 1px solid va
 table.annual th:first-child, table.annual td:first-child { text-align: left; position: sticky; left: 0; background: var(--surface); }
 table.annual tr.total td { font-weight: 700; }
 table.annual td.zero { color: var(--muted); }
+.flash { cursor: pointer; border-color: var(--good); }
+.notice { font-size: 14px; padding: 8px 10px; border-radius: 8px; background: var(--warn-bg); color: var(--warn-text); }
+.model-list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 10px; }
+.model-list label.check { align-items: flex-start; }
+.model-list input[type='radio'] { width: 18px; height: 18px; margin-top: 2px; }

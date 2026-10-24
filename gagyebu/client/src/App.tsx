@@ -19,6 +19,7 @@ export type Ctx = { me: Me; reloadMe: () => void; categories: Category[]; reload
 export default function App() {
   const [me, setMe] = useState<MeResponse | undefined>(undefined)
   const [error, setError] = useState('')
+  const [flash, setFlash] = useState('')
   const [categories, setCategories] = useState<Category[]>([])
   const [tab, setTab] = useState<Tab>('dashboard')
   const [month, setMonth] = useState(thisMonth())
@@ -61,7 +62,14 @@ export default function App() {
 
       <nav className="tabs">
         {TABS.map((t) => (
-          <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>
+          <button
+            key={t.id}
+            className={tab === t.id ? 'active' : ''}
+            onClick={() => {
+              setTab(t.id)
+              setFlash('')
+            }}
+          >
             <span className="tab-icon">{t.icon}</span>
             <span>{t.label}</span>
           </button>
@@ -69,9 +77,28 @@ export default function App() {
       </nav>
 
       <main className="content">
+        {flash && (
+          <div className="card flash" onClick={() => setFlash('')}>
+            ✅ {flash}
+          </div>
+        )}
         {tab === 'dashboard' && <Dashboard ctx={ctx} goUpload={() => setTab('upload')} />}
         {tab === 'transactions' && <Transactions ctx={ctx} />}
-        {tab === 'upload' && <Upload ctx={ctx} onSaved={() => setTab('transactions')} />}
+        {tab === 'upload' && (
+          <Upload
+            ctx={ctx}
+            onSaved={(months, count) => {
+              // 저장한 내역이 가장 많은 달로 이동해서 바로 보이게 한다.
+              const counts = new Map<string, number>()
+              months.forEach((m) => counts.set(m, (counts.get(m) ?? 0) + 1))
+              const top = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0]
+              if (top) setMonth(top)
+              const label = [...counts.keys()].sort().map((m) => `${m.slice(0, 4)}년 ${Number(m.slice(5))}월`).join(', ')
+              setFlash(`${count}건을 저장했어요 (${label}). 구글 시트 '거래내역' 탭에도 바로 들어가 있어요.`)
+              setTab('transactions')
+            }}
+          />
+        )}
         {tab === 'settings' && <Settings ctx={ctx} />}
       </main>
     </div>
