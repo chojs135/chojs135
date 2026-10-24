@@ -736,6 +736,8 @@ function saveBudgets_(items) {
     rows.forEach(function (r) { if (String(r['카테고리']) === c.name) remove.push(r._row); });
   });
   deleteRows_('budget', remove);
+  // 예산은 모든 월 탭의 "예산(목표) 관리" 표에 들어가므로 전체를 다시 그린다.
+  rebuildReports_();
   return true;
 }
 

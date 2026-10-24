@@ -16,6 +16,9 @@
   --series-2: #eb6834; /* 지출 */
   --series-3: #1baf7a; /* 저축 */
   --good-bg: #dcfce7;
+  /* 카테고리 8색 (dataviz 기본 팔레트, 순서 고정) */
+  --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
+  --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948; --cat-other: #a8a29e;
   --warn-bg: #fef3c7;
   --warn-text: #92400e;
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
@@ -39,6 +42,8 @@
     --series-2: #d95926;
     --series-3: #199e70;
     --good-bg: #0f2e1c;
+    --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
+    --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767; --cat-other: #6b6a66;
     --warn-bg: #3b2f0a;
     --warn-text: #fcd34d;
   }
@@ -231,3 +236,21 @@ table.annual td.zero { color: var(--muted); }
 .dup { font-size: 13px; padding: 6px 8px; border-radius: 8px; background: var(--hover); }
 .dup.strong { background: var(--warn-bg); color: var(--warn-text); }
 .primary-link { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+
+/* 원그래프 */
+.donut-card { display: flex; flex-direction: column; }
+.donut-wrap { display: grid; grid-template-columns: 200px 1fr; gap: 16px; align-items: center; }
+@media (max-width: 480px) { .donut-wrap { grid-template-columns: 1fr; } }
+.donut { position: relative; height: 200px; }
+.donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+.donut-center b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.donut-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.donut-legend li { display: grid; grid-template-columns: 12px 1fr auto auto; gap: 8px; align-items: center; font-size: 14px; }
+.donut-legend .swatch { width: 10px; height: 10px; margin: 0; }
+.legend-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+details.more { margin-top: 4px; }
+details.more > summary { cursor: pointer; padding: 12px 4px; color: var(--muted); font-size: 14px; list-style: none; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::before { content: '▸ '; }
+details.more[open] > summary::before { content: '▾ '; }
+details.more > section { margin-bottom: 12px; }

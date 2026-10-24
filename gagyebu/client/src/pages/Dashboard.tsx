@@ -1,7 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { api, shortWon, today, won, type Annual, type AnnualRow, type Stats } from '../api'
+import { api, shortWon, today, won, type Annual, type AnnualRow, type Category, type Stats } from '../api'
 import type { Ctx } from '../App'
+import Donut from '../components/Donut'
+import { categorySlices, type Slice } from '../components/slices'
+
+/** 수입이 어디로 갔나: 지출 / 저축 / 남은 돈 */
+function incomeSlices(income: number, expense: number, saving: number): Slice[] {
+  const net = income - expense - saving
+  return [
+    { key: 'expense', label: '지출', amount: expense, color: 'var(--series-2)' },
+    { key: 'saving', label: '저축·투자', amount: saving, color: 'var(--series-3)' },
+    ...(net > 0 ? [{ key: 'net', label: '남은 돈', amount: net, color: 'var(--series-1)' }] : []),
+  ]
+}
 
 function Delta({ cur, prev, goodWhenDown }: { cur: number; prev: number; goodWhenDown?: boolean }) {
   if (!prev) return <span className="muted small">지난달 기록 없음</span>
@@ -70,7 +82,7 @@ function Calendar({ s }: { s: Stats }) {
   )
 }
 
-function Monthly({ s, goUpload }: { s: Stats; goUpload: () => void }) {
+function Monthly({ s, goUpload, order }: { s: Stats; goUpload: () => void; order: number[] }) {
   const maxCat = Math.max(1, ...s.byCategory.map((c) => Math.max(c.amount, c.budget ?? 0)))
   const trend = s.trend.map((t) => ({ ...t, label: `${Number(t.month.slice(5))}월` }))
   const variable = s.expense - s.fixedExpense
@@ -112,6 +124,26 @@ function Monthly({ s, goUpload }: { s: Stats; goUpload: () => void }) {
         </div>
       </section>
 
+      <section className="grid-2">
+        <Donut
+          title="어디에 썼나"
+          centerLabel="지출"
+          centerValue={s.expense}
+          empty="지출 기록이 없어요."
+          slices={categorySlices(
+            s.byCategory.map((c) => ({ ...c, note: c.budget ? `예산 ${Math.round((c.amount / c.budget) * 100)}%${c.amount > c.budget ? ' ⚠️' : ''}` : undefined })),
+            order,
+          )}
+        />
+        <Donut
+          title={s.net < 0 ? `수입은 어디로 갔나 (⚠️ ${won(-s.net)} 초과)` : '수입은 어디로 갔나'}
+          centerLabel="수입"
+          centerValue={s.income}
+          empty="이번 달 수입 기록이 없어요."
+          slices={s.income ? incomeSlices(s.income, s.expense, s.saving) : []}
+        />
+      </section>
+
       {s.insights.length > 0 && (
         <section className="card insights">
           <h3>💡 이번 달 체크포인트</h3>
@@ -125,9 +157,13 @@ function Monthly({ s, goUpload }: { s: Stats; goUpload: () => void }) {
         </section>
       )}
 
-      <section className="grid-2">
+      <Calendar s={s} />
+
+      <details className="more">
+        <summary>📊 자세히 보기 (예산 · 12개월 추이 · 결제수단 · 많이 쓴 곳 · 세부항목)</summary>
+      <section>
         <div className="card">
-          <h3>카테고리별 지출</h3>
+          <h3>카테고리별 지출 · 예산</h3>
           {s.byCategory.length === 0 && <p className="muted">지출 기록이 없어요.</p>}
           <ul className="cat-bars">
             {s.byCategory.map((c) => {
@@ -155,7 +191,6 @@ function Monthly({ s, goUpload }: { s: Stats; goUpload: () => void }) {
             })}
           </ul>
         </div>
-        <Calendar s={s} />
       </section>
 
       <section className="grid-2">
@@ -268,6 +303,7 @@ function Monthly({ s, goUpload }: { s: Stats; goUpload: () => void }) {
           )}
         </div>
       </section>
+      </details>
     </>
   )
 }
@@ -321,8 +357,9 @@ function AnnualTable({ title, rows }: { title: string; rows: AnnualRow[] }) {
   )
 }
 
-function Yearly({ a }: { a: Annual }) {
+function Yearly({ a, categories, order }: { a: Annual; categories: Category[]; order: number[] }) {
   const data = a.totals.map((t) => ({ ...t, label: `${Number(t.month.slice(5))}월` }))
+  const idOf = (name: string) => categories.find((c) => c.type === 'expense' && c.name === name)?.id ?? null
   return (
     <>
       <section className="kpis kpis-4">
@@ -347,15 +384,27 @@ function Yearly({ a }: { a: Annual }) {
           <span className="muted small">기록된 {a.activeMonths}개월 기준</span>
         </div>
       </section>
+      <section className="grid-2">
+        <Donut
+          title={`${a.year}년 어디에 썼나`}
+          centerLabel="연간 지출"
+          centerValue={a.expense}
+          slices={categorySlices(a.expenseTable.map((r) => ({ id: idOf(r.name), name: r.name, icon: r.icon, amount: r.total, note: `월평균 ${shortWon(r.average)}원` })), order)}
+        />
+        <Donut title={`${a.year}년 수입은 어디로 갔나`} centerLabel="연간 수입" centerValue={a.income} empty="수입 기록이 없어요." slices={a.income ? incomeSlices(a.income, a.expense, a.saving) : []} />
+      </section>
       <section className="card">
         <h3>{a.year}년 월별 흐름</h3>
         <div className="chart">
           <TrendChart data={data} />
         </div>
       </section>
-      <AnnualTable title="지출 (대분류 × 월)" rows={a.expenseTable} />
-      <AnnualTable title="수입" rows={a.incomeTable} />
-      <AnnualTable title="저축·투자" rows={a.savingTable} />
+      <details className="more">
+        <summary>📋 월별 상세표 (구글 시트의 통합시트와 같은 표)</summary>
+        <AnnualTable title="지출 (대분류 × 월)" rows={a.expenseTable} />
+        <AnnualTable title="수입" rows={a.incomeTable} />
+        <AnnualTable title="저축·투자" rows={a.savingTable} />
+      </details>
     </>
   )
 }
@@ -367,6 +416,7 @@ export default function Dashboard({ ctx, goUpload }: { ctx: Ctx; goUpload: () =>
   const [s, setS] = useState<Stats | null>(null)
   const [a, setA] = useState<Annual | null>(null)
   const year = ctx.month.slice(0, 4)
+  const order = ctx.categories.filter((c) => c.type === 'expense').map((c) => c.id)
 
   useEffect(() => {
     if (view === 'month') api<Stats>(`/stats?month=${ctx.month}${who ? `&member_id=${who}` : ''}`).then(setS)
@@ -400,8 +450,8 @@ export default function Dashboard({ ctx, goUpload }: { ctx: Ctx; goUpload: () =>
           </button>
         </div>
       )}
-      {view === 'month' && (s ? <Monthly s={s} goUpload={goUpload} /> : <div className="muted">불러오는 중…</div>)}
-      {view === 'year' && (a ? <Yearly a={a} /> : <div className="muted">불러오는 중…</div>)}
+      {view === 'month' && (s ? <Monthly s={s} goUpload={goUpload} order={order} /> : <div className="muted">불러오는 중…</div>)}
+      {view === 'year' && (a ? <Yearly a={a} categories={ctx.categories} order={order} /> : <div className="muted">불러오는 중…</div>)}
     </div>
   )
 }
