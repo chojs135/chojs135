@@ -35,7 +35,27 @@ class Range {
   constructor(sheet, row, col, nrows, ncols) {
     Object.assign(this, { sheet, row, col, nrows, ncols })
     // 알 수 없는 서식 메서드(setBackground 등)는 그냥 통과
-    return new Proxy(this, { get: (t, k) => (k in t ? t[k] : typeof k === 'string' ? () => t : undefined) })
+    const proxy = new Proxy(this, { get: (t, k) => (k in t ? t[k] : typeof k === 'string' ? () => proxy : undefined) })
+    return proxy
+  }
+  /** Sheets의 Range.sort: [{column, ascending}] (column은 시트 기준 1부터) */
+  sort(specs) {
+    const list = Array.isArray(specs) ? specs : [specs]
+    const rows = this.sheet.data.slice(this.row - 1, this.row - 1 + this.nrows)
+    const val = (v) => (v instanceof Object && typeof v.getTime === 'function' ? v.getTime() : v)
+    rows.sort((a, b) => {
+      for (const s of list) {
+        const col = typeof s === 'number' ? s : s.column
+        const asc = typeof s === 'number' ? true : s.ascending !== false
+        const x = val(a[col - 1])
+        const y = val(b[col - 1])
+        if (x === y) continue
+        return (x < y ? -1 : 1) * (asc ? 1 : -1)
+      }
+      return 0
+    })
+    this.sheet.data.splice(this.row - 1, this.nrows, ...rows)
+    return this
   }
   getValues() {
     const out = []
@@ -93,6 +113,9 @@ class Sheet {
     if (typeof a === 'string') return new Range(this, 1, 1, 0, 0) // 'B:B' 같은 열 서식 지정용
     if (a < 1 || b < 1 || c < 1 || d < 1) throw new Error(`잘못된 범위 ${a},${b},${c},${d}`)
     return new Range(this, a, b, c, d)
+  }
+  deleteRows(start, n) {
+    this.data.splice(start - 1, n)
   }
   deleteRow(r) {
     if (r < 1 || r > this.data.length) throw new Error(`없는 행 삭제: ${r}`)

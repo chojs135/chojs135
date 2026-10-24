@@ -8,10 +8,13 @@
  */
 
 var SHEETS = {
+  // 거래내역은 연도별 탭("2026 거래내역")에 엑셀 가계부와 같은 열 순서로 저장한다.
+  // headers는 시트에 보이는 열 이름, keys는 코드에서 쓰는 이름(같은 위치끼리 짝).
   tx: {
     name: '거래내역',
-    // 열은 뒤에만 덧붙인다(이미 쓰고 있는 시트와 호환).
-    headers: ['ID', '날짜', '구분', '금액', '카테고리', '세부항목', '가맹점', '내용', '결제수단', '사용자', '고정', '태그', '메모', '입력방식', '업로드ID', '입력자', '입력일시', '수정일시', '정기ID'],
+    yearly: true,
+    headers: ['No', '날짜', '구분', '내용', '금액', '대분류', '소분류', '지출 방법', '태그', '사용자', '고정', '메모', '상세', '입력방식', '입력자', '입력일시', '수정일시', '업로드ID', '정기ID'],
+    keys: ['ID', '날짜', '구분', '가맹점', '금액', '카테고리', '세부항목', '결제수단', '태그', '사용자', '고정', '메모', '내용', '입력방식', '입력자', '입력일시', '수정일시', '업로드ID', '정기ID'],
   },
   cat: { name: '카테고리', headers: ['ID', '구분', '이름', '아이콘', '색', '세부항목', '순서'] },
   budget: { name: '예산', headers: ['카테고리', '월 예산'] },
@@ -153,17 +156,23 @@ function ss_() {
   return SpreadsheetApp.getActiveSpreadsheet();
 }
 
+function keysOf_(key) {
+  return SHEETS[key].keys || SHEETS[key].headers;
+}
+
+function styleHeader_(sh, n) {
+  sh.getRange(1, 1, 1, n).setFontWeight('bold').setBackground('#eef2ff');
+  sh.setFrozenRows(1);
+}
+
 function sheet_(key) {
   var def = SHEETS[key];
+  if (def.yearly) return yearSheet_(Number(Utilities.formatDate(new Date(), tz_(), 'yyyy')));
   var sh = ss_().getSheetByName(def.name);
   if (!sh) {
     sh = ss_().insertSheet(def.name);
-    sh.getRange(1, 1, 1, def.headers.length).setValues([def.headers]).setFontWeight('bold');
-    sh.setFrozenRows(1);
-    if (key === 'tx') {
-      sh.getRange('B:B').setNumberFormat('yyyy-mm-dd');
-      sh.getRange('D:D').setNumberFormat('#,##0');
-    }
+    sh.getRange(1, 1, 1, def.headers.length).setValues([def.headers]);
+    styleHeader_(sh, def.headers.length);
     if (key === 'budget') sh.getRange('B:B').setNumberFormat('#,##0');
     if (key === 'recurring') {
       sh.getRange('D:D').setNumberFormat('#,##0');
@@ -176,42 +185,157 @@ function sheet_(key) {
   return sh;
 }
 
-/** 시트 전체를 [{헤더: 값, _row: 시트 행 번호}] 로 읽는다. */
-function read_(key) {
-  var sh = sheet_(key);
-  var headers = SHEETS[key].headers;
+// ---------------------------------------------------------------- 연도별 거래내역 탭
+
+var TX_YEAR_RE = /^(\d{4}) 거래내역$/;
+
+function yearTabName_(year) {
+  return year + ' 거래내역';
+}
+
+function yearSheet_(year) {
+  var name = yearTabName_(year);
+  var sh = ss_().getSheetByName(name);
+  if (sh) return sh;
+  var h = SHEETS.tx.headers;
+  sh = ss_().insertSheet(name);
+  sh.getRange(1, 1, 1, h.length).setValues([h]);
+  styleHeader_(sh, h.length);
+  // 관리용 열(상세 이후)은 회색 머리줄
+  sh.getRange(1, h.indexOf('상세') + 1, 1, h.length - h.indexOf('상세')).setBackground('#f1f1ef').setFontColor('#6b6a66');
+  sh.getRange('B:B').setNumberFormat('yyyy-mm-dd');
+  sh.getRange('E:E').setNumberFormat('#,##0');
+  [[1, 50], [2, 90], [3, 50], [4, 200], [5, 90], [6, 90], [7, 90], [8, 100], [9, 90], [10, 60], [11, 44], [12, 160]].forEach(function (w) { sh.setColumnWidth(w[0], w[1]); });
+  return sh;
+}
+
+function txSheets_() {
+  return ss_()
+    .getSheets()
+    .filter(function (sh) { return TX_YEAR_RE.test(sh.getName()); });
+}
+
+function readSheet_(sh, key) {
+  var keys = keysOf_(key);
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var values = sh.getRange(2, 1, last - 1, headers.length).getValues();
+  var values = sh.getRange(2, 1, last - 1, keys.length).getValues();
   var out = [];
   for (var i = 0; i < values.length; i++) {
     if (values[i].every(function (v) { return v === '' || v === null; })) continue;
-    var o = { _row: i + 2 };
-    for (var j = 0; j < headers.length; j++) o[headers[j]] = values[i][j];
+    var o = { _row: i + 2, _sheet: sh.getName() };
+    for (var j = 0; j < keys.length; j++) o[keys[j]] = values[i][j];
     out.push(o);
   }
   return out;
 }
 
-function toRow_(key, obj) {
-  return SHEETS[key].headers.map(function (h) { return obj[h] === undefined || obj[h] === null ? '' : obj[h]; });
+/** 시트 전체를 [{열 이름: 값, _row: 시트 행 번호, _sheet: 탭 이름}] 로 읽는다. */
+function read_(key) {
+  if (SHEETS[key].yearly) {
+    var all = [];
+    txSheets_().forEach(function (sh) { all = all.concat(readSheet_(sh, key)); });
+    return all;
+  }
+  return readSheet_(sheet_(key), key);
 }
 
-function append_(key, objs) {
+function toRow_(key, obj) {
+  return keysOf_(key).map(function (h) { return obj[h] === undefined || obj[h] === null ? '' : obj[h]; });
+}
+
+function appendTo_(sh, key, objs) {
   if (!objs.length) return;
-  var sh = sheet_(key);
   var rows = objs.map(function (o) { return toRow_(key, o); });
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
 }
 
-function writeRow_(key, rowNum, obj) {
-  sheet_(key).getRange(rowNum, 1, 1, SHEETS[key].headers.length).setValues([toRow_(key, obj)]);
+/** 연도별 탭은 날짜순으로 정렬해 둔다(엑셀처럼 위에서부터 차례로). */
+function sortYearSheet_(sh) {
+  var last = sh.getLastRow();
+  if (last > 2) sh.getRange(2, 1, last - 1, SHEETS.tx.headers.length).sort([{ column: 2, ascending: true }, { column: 1, ascending: true }]);
 }
 
-/** 여러 행을 지울 때는 아래쪽부터 지워야 행 번호가 밀리지 않는다. */
-function deleteRows_(key, rowNums) {
-  var sh = sheet_(key);
-  rowNums.slice().sort(function (a, b) { return b - a; }).forEach(function (r) { sh.deleteRow(r); });
+function append_(key, objs) {
+  if (!objs.length) return;
+  if (!SHEETS[key].yearly) return appendTo_(sheet_(key), key, objs);
+  var byYear = {};
+  objs.forEach(function (o) {
+    var y = ymd_(o['날짜']).slice(0, 4);
+    (byYear[y] = byYear[y] || []).push(o);
+  });
+  Object.keys(byYear).forEach(function (y) {
+    var sh = yearSheet_(Number(y));
+    appendTo_(sh, key, byYear[y]);
+    sortYearSheet_(sh);
+  });
+}
+
+/** rec는 read_가 돌려준 행(또는 행 번호). 거래 날짜의 연도가 바뀌면 그 연도 탭으로 옮긴다. */
+function writeRow_(key, rec, obj) {
+  if (typeof rec === 'number') rec = { _row: rec };
+  if (SHEETS[key].yearly) {
+    var target = yearTabName_(ymd_(obj['날짜']).slice(0, 4));
+    if (rec._sheet !== target) {
+      deleteRows_(key, [rec]);
+      append_(key, [obj]);
+      return;
+    }
+    var sh = ss_().getSheetByName(rec._sheet);
+    sh.getRange(rec._row, 1, 1, keysOf_(key).length).setValues([toRow_(key, obj)]);
+    sortYearSheet_(sh);
+    return;
+  }
+  sheet_(key).getRange(rec._row, 1, 1, keysOf_(key).length).setValues([toRow_(key, obj)]);
+}
+
+/** recs: read_가 돌려준 행들(또는 행 번호들). 아래쪽부터 지워야 행 번호가 밀리지 않는다. */
+function deleteRows_(key, recs) {
+  var bySheet = {};
+  recs.forEach(function (r) {
+    var rec = typeof r === 'number' ? { _row: r } : r;
+    var name = rec._sheet || SHEETS[key].name;
+    (bySheet[name] = bySheet[name] || []).push(rec._row);
+  });
+  Object.keys(bySheet).forEach(function (name) {
+    var sh = SHEETS[key].yearly ? ss_().getSheetByName(name) : sheet_(key);
+    bySheet[name].sort(function (a, b) { return b - a; }).forEach(function (r) { sh.deleteRow(r); });
+  });
+}
+
+/** 한 칸만 고친다(rec: read_가 돌려준 행). */
+function setCell_(key, rec, col, value) {
+  var sh = rec._sheet ? ss_().getSheetByName(rec._sheet) : sheet_(key);
+  sh.getRange(rec._row, keysOf_(key).indexOf(col) + 1).setValue(value);
+}
+
+/**
+ * 예전 버전의 '거래내역' 탭 하나(ID, 날짜, 구분, 금액, 카테고리 … 순서)를
+ * 엑셀식 열 순서의 연도별 탭으로 옮긴다. 한 번만 실행된다.
+ */
+function migrateTxLayout_() {
+  var legacy = ss_().getSheetByName('거래내역');
+  if (!legacy) return false;
+  return withLock_(function () {
+    legacy = ss_().getSheetByName('거래내역');
+    if (!legacy) return false;
+    var width = legacy.getLastColumn();
+    var last = legacy.getLastRow();
+    var objs = [];
+    if (last >= 2 && width) {
+      var values = legacy.getRange(1, 1, last, width).getValues();
+      var header = values[0].map(String);
+      for (var i = 1; i < values.length; i++) {
+        if (values[i].every(function (v) { return v === '' || v === null; })) continue;
+        var o = {};
+        header.forEach(function (h, j) { o[h] = values[i][j]; });
+        objs.push(o);
+      }
+    }
+    append_('tx', objs);
+    ss_().deleteSheet(legacy);
+    return true;
+  });
 }
 
 function withLock_(fn) {
@@ -325,9 +449,11 @@ function seedCategories_() {
 
 /** 시트의 표 영역(머리줄 아래)을 통째로 다시 쓴다. */
 function rewrite_(key, objs) {
-  var sh = sheet_(key);
   var n = SHEETS[key].headers.length;
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, n).clearContent();
+  var sheets = SHEETS[key].yearly ? txSheets_() : [sheet_(key)];
+  sheets.forEach(function (sh) {
+    if (sh.getLastRow() > 1) sh.deleteRows(2, sh.getLastRow() - 1);
+  });
   append_(key, objs);
 }
 
@@ -521,6 +647,7 @@ function route_(method, path, body) {
   if (key === 'POST /setup') return setup_(body);
 
   var me = requireMember_();
+  migrateTxLayout_();
   ensurePreset_();
   postRecurring_(false);
   var id = seg[1];
@@ -712,10 +839,8 @@ function updateCategory_(id, body) {
 }
 
 function renameIn_(key, col, from, to, match) {
-  var sh = sheet_(key);
-  var colIdx = SHEETS[key].headers.indexOf(col) + 1;
   read_(key).forEach(function (r) {
-    if (String(r[col]) === from && match(r)) sh.getRange(r._row, colIdx).setValue(to);
+    if (String(r[col]) === from && match(r)) setCell_(key, r, col, to);
   });
 }
 
@@ -808,7 +933,7 @@ function updateTx_(id, t) {
     입력일시: before['입력일시'],
     수정일시: now_(),
   });
-  writeRow_('tx', before._row, row);
+  writeRow_('tx', before, row);
   // 사용자가 분류를 고쳤으면 다음부터 같은 가맹점은 그렇게 분류한다.
   if (t.merchant && row['카테고리'] && (String(before['카테고리']) !== row['카테고리'] || String(before['세부항목']) !== row['세부항목'])) {
     learnRule_(t.merchant, t.type, row['카테고리'], row['세부항목']);
@@ -819,7 +944,7 @@ function updateTx_(id, t) {
 
 function deleteTx_(id) {
   var rows = read_('tx').filter(function (r) { return Number(r.ID) === id; });
-  deleteRows_('tx', rows.map(function (r) { return r._row; }));
+  deleteRows_('tx', rows);
   refreshReports_(rows.map(function (r) { return ymd_(r['날짜']).slice(0, 7); }));
   return true;
 }
@@ -1103,14 +1228,12 @@ function markDuplicates_(items, existing) {
 function fillFromSkipped_(skipped) {
   if (!skipped.length) return 0;
   var rows = read_('tx');
-  var col = SHEETS.tx.headers.indexOf('결제수단') + 1;
-  var sh = sheet_('tx');
   var n = 0;
   skipped.forEach(function (i) {
     if (!i.payment_method) return;
     var r = rows.filter(function (x) { return Number(x.ID) === Number(i.duplicate.of_id); })[0];
     if (r && !r['결제수단']) {
-      sh.getRange(r._row, col).setValue(i.payment_method);
+      setCell_('tx', r, '결제수단', i.payment_method);
       n++;
     }
   });

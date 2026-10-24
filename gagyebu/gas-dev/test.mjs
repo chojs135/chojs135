@@ -123,7 +123,16 @@ assert.equal(s.expense, 320000)
 // 구글 시트 보고서 탭 (엑셀 가계부 구성)
 const names = gas.sheets.map((x) => x.name)
 assert.deepEqual(names.slice(0, 13), ['통합시트', '1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'], '보고서 탭이 앞에')
-assert.ok(names.indexOf('거래내역') > 12, '데이터 탭은 뒤에')
+assert.deepEqual(names.slice(13, 16), ['결제일 관리', '2026 거래내역', '설정'], '결제일 관리 → 연도별 거래내역 → 설정')
+assert.ok(!names.includes('거래내역'), '하나짜리 거래내역 탭은 없음')
+const y26 = gas.sheets.find((x) => x.name === '2026 거래내역')
+assert.deepEqual(y26.data[0].slice(0, 10), ['No', '날짜', '구분', '내용', '금액', '대분류', '소분류', '지출 방법', '태그', '사용자'], '엑셀 가계부 열 순서')
+const dates = y26.data.slice(1).map((r) => r[1].getTime())
+assert.deepEqual(dates, [...dates].sort((a, b) => a - b), '날짜순 정렬')
+const settingsTab = gas.sheets.find((x) => x.name === '설정')
+assert.ok(settingsTab.find('대분류 / 소분류') && settingsTab.find('지출 방법') && settingsTab.find('월 예산'))
+const [cr] = settingsTab.find('🍚 식비')
+assert.deepEqual(settingsTab.data[cr - 1].slice(1, 7), ['지출', '🍚 식비', '식재료', '편의점/까페', '외식', '배달'])
 assert.ok(!names.includes('월별요약'))
 const annual = gas.sheets.find((x) => x.name === '통합시트')
 assert.equal(annual.getCharts().length, 1, '월별 차트')
@@ -369,8 +378,11 @@ gas.authState.missing = false
     [5, '저축', '투자', '📈', '#7c3aed', '주식/ETF', 5],
     [6, '지출', '골프', '⛳', '#000000', '라운딩', 6],
   ]
-  const txHeader = sheet('거래내역').data[0]
+  // 예전 버전처럼 '거래내역' 탭 하나에 옛 열 순서로 들어 있던 상태
+  const txHeader = ['ID', '날짜', '구분', '금액', '카테고리', '세부항목', '가맹점', '내용', '결제수단', '사용자', '고정', '태그', '메모', '입력방식', '업로드ID', '입력자', '입력일시', '수정일시']
   const row = (o) => txHeader.map((h) => o[h] ?? '')
+  const Legacy = sheet('카테고리').constructor
+  g.sheets.push(new Legacy('거래내역'))
   sheet('거래내역').data = [
     txHeader,
     row({ ID: 1, 날짜: '2026-10-02', 구분: '지출', 금액: 50000, 카테고리: '식비', 세부항목: '장보기', 가맹점: '이마트', 사용자: '민호' }),
@@ -379,6 +391,7 @@ gas.authState.missing = false
     row({ ID: 4, 날짜: '2026-10-25', 구분: '수입', 금액: 3000000, 카테고리: '급여', 세부항목: '월급', 가맹점: '회사', 사용자: '민호' }),
     row({ ID: 5, 날짜: '2026-10-26', 구분: '저축', 금액: 300000, 카테고리: '투자', 세부항목: '주식/ETF', 가맹점: '키움', 사용자: '민호' }),
     row({ ID: 6, 날짜: '2026-10-27', 구분: '지출', 금액: 150000, 카테고리: '골프', 세부항목: '라운딩', 가맹점: '골프장', 사용자: '민호' }),
+    row({ ID: 7, 날짜: '2025-12-24', 구분: '지출', 금액: 80000, 카테고리: '식비', 세부항목: '외식', 가맹점: '작년 크리스마스', 사용자: '공동', 결제수단: '현대카드', 메모: '메모 유지' }),
   ]
   sheet('예산').data = [sheet('예산').data[0], ['주거/관리비', 300000], ['통신/구독', 100000], ['식비', 500000]]
   sheet('자동분류규칙').data = [sheet('자동분류규칙').data[0], ['SKT', '지출', '통신/구독', '휴대폰', '']]
@@ -395,6 +408,18 @@ gas.authState.missing = false
   assert.deepEqual([nameOf(by('회사').category_id), by('회사').subcategory], ['수입', '월급'])
   assert.deepEqual([nameOf(by('키움').category_id), by('키움').subcategory], ['저축', '주식'])
   assert.equal(nameOf(by('골프장').category_id), '골프', '직접 만든 카테고리는 그대로')
+  // 연도별 탭으로 옮겨짐
+  assert.ok(!sheet('거래내역'), '옛 탭은 지워짐')
+  assert.equal(sheet('2026 거래내역').data.length - 1, 6)
+  const x25 = sheet('2025 거래내역').data
+  assert.equal(x25.length - 1, 1)
+  assert.deepEqual([x25[1][0], x25[1][3], x25[1][4], x25[1][5], x25[1][6], x25[1][7], x25[1][11]], [7, '작년 크리스마스', 80000, '식비', '외식', '현대카드', '메모 유지'])
+  assert.equal(list.length, 7)
+  // 연도를 바꿔 고치면 그 연도 탭으로 옮겨감
+  const xmas = by('작년 크리스마스')
+  ok(g.call(U, 'PUT', `/transactions/${xmas.id}`, { ...xmas, date: '2026-01-02' }))
+  assert.equal(sheet('2025 거래내역').data.length - 1, 0)
+  assert.ok(sheet('2026 거래내역').data.some((r) => r[3] === '작년 크리스마스'))
   assert.ok(!cats.some((c) => c.name === '주거/관리비' || c.name === '통신/구독'))
   const budgets = ok(g.call(U, 'GET', '/budgets'))
   assert.equal(budgets.find((b) => nameOf(b.category_id) === '고정지출').amount, 400000, '합쳐진 예산')

@@ -378,12 +378,63 @@ function setWidths_(sh, widths) {
   Object.keys(widths).forEach(function (c) { sh.setColumnWidth(Number(c), widths[c]); });
 }
 
-/** 통합시트, 1월~12월을 맨 앞에, 데이터 탭을 뒤에 둔다. */
+// ---------------------------------------------------------------- 설정 탭 (엑셀의 설정 탭처럼 보기 좋게 정리한 것)
+
+var SETTINGS_TAB = '설정';
+
+function buildSettingsTab_(all, cats, members) {
+  var g = new Grid_();
+  g.put(2, 2, [['설정']]);
+  g.style('title', 2, 2);
+  g.put(3, 2, [['분류·예산·구성원은 앱의 설정 화면에서 바꾸면 여기에 반영돼요. (원본: 카테고리·예산·구성원 탭)']]);
+  g.style('muted', 3, 2);
+
+  var maxSubs = Math.max.apply(null, [1].concat(cats.map(function (c) { return c.subcategories.length; })));
+  var head = ['구분', '대분류'];
+  for (var i = 1; i <= maxSubs; i++) head.push('소분류 ' + i);
+  var r = g.table(5, 2, '대분류 / 소분류', head, cats.map(function (c) { return [TYPE_KO[c.type], c.icon + ' ' + c.name].concat(c.subcategories); }));
+
+  // 지출 방법: 내역에 쓰인 결제수단과 사용 횟수(엑셀의 '지출방법' 목록)
+  var pay = {};
+  all.forEach(function (t) {
+    if (!t.payment_method) return;
+    var p = (pay[t.payment_method] = pay[t.payment_method] || { count: 0, last: '', amount: 0 });
+    p.count++;
+    if (t.type === 'expense') p.amount += t.amount;
+    if (t.date > p.last) p.last = t.date;
+  });
+  r = g.table(r, 2, '지출 방법', ['지출 방법', '사용 건수', '누적 지출', '최근 사용일'], Object.keys(pay).sort(function (a, b) { return pay[b].count - pay[a].count; }).map(function (k) { return [k, pay[k].count, pay[k].amount, pay[k].last]; }));
+
+  r = g.table(r, 2, '구성원', ['이름', '구글 계정'], members.map(function (m) { return [m.name, m.email]; }));
+
+  var budgets = budgets_();
+  g.table(r, 2, '월 예산', ['대분류', '예산'], budgets.map(function (b) {
+    var c = cats.filter(function (x) { return x.id === b.category_id; })[0];
+    return [c ? c.name : '', b.amount];
+  }));
+
+  var sh = reportSheet_(SETTINGS_TAB);
+  g.write(sh);
+  setWidths_(sh, { 1: 16, 2: 70, 3: 130 });
+}
+
+/**
+ * 탭 순서(엑셀 가계부와 비슷하게):
+ * 통합시트, 1월~12월, 결제일 관리, (관리 탭), 연도별 거래내역(최근 연도 먼저), 설정, 원본 데이터 탭
+ */
 function orderTabs_() {
   var ss = ss_();
   var order = [REPORT_ANNUAL];
   for (var m = 1; m <= 12; m++) order.push(monthTabName_(m));
-  ['recurring', 'tx', 'budget', 'cat', 'member', 'rule', 'upload'].forEach(function (k) { order.push(SHEETS[k].name); });
+  order.push(SHEETS.recurring.name);
+  (typeof LEDGER_ORDER !== 'undefined' ? LEDGER_ORDER : []).forEach(function (k) { order.push(SHEETS[k].name); });
+  txSheets_()
+    .map(function (sh) { return sh.getName(); })
+    .sort()
+    .reverse()
+    .forEach(function (n) { order.push(n); });
+  order.push(SETTINGS_TAB);
+  ['budget', 'cat', 'member', 'rule', 'upload'].forEach(function (k) { order.push(SHEETS[k].name); });
   order.forEach(function (name, i) {
     var sh = ss.getSheetByName(name);
     if (!sh) return;
@@ -403,6 +454,7 @@ function rebuildReports_(year) {
   var members = members_();
   for (var m = 1; m <= 12; m++) buildMonthTab_(year, m, all, cats, members);
   buildAnnualTab_(year, all, cats, members);
+  buildSettingsTab_(all, cats, members);
   orderTabs_();
   return { year: year };
 }
