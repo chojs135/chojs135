@@ -6,20 +6,31 @@ function shiftMonth(month: string, delta: number) {
   return d.toISOString().slice(0, 7);
 }
 
-function totals(householdId: number, month: string) {
+/** 대시보드를 "전체 / 사람별 / 공동"으로 볼 때 쓰는 조건. member가 없으면 전체. */
+export type MemberFilter = number | "shared" | undefined;
+function memberClause(member: MemberFilter, alias = "") {
+  if (member === undefined) return { sql: "", params: [] as number[] };
+  if (member === "shared") return { sql: ` AND ${alias}member_id IS NULL`, params: [] as number[] };
+  return { sql: ` AND ${alias}member_id = ?`, params: [member] };
+}
+
+function totals(householdId: number, month: string, member: MemberFilter) {
+  const m = memberClause(member);
   return db
     .prepare(
       `SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount END),0) AS income,
               COALESCE(SUM(CASE WHEN type='expense' THEN amount END),0) AS expense,
               COUNT(*) AS count
-       FROM transactions WHERE household_id = ? AND substr(date,1,7) = ?`,
+       FROM transactions WHERE household_id = ? AND substr(date,1,7) = ?${m.sql}`,
     )
-    .get(householdId, month) as { income: number; expense: number; count: number };
+    .get(householdId, month, ...m.params) as { income: number; expense: number; count: number };
 }
 
-export function monthlyStats(householdId: number, month: string) {
-  const cur = totals(householdId, month);
-  const prev = totals(householdId, shiftMonth(month, -1));
+export function monthlyStats(householdId: number, month: string, member?: MemberFilter) {
+  const m = memberClause(member);
+  const mt = memberClause(member, "t.");
+  const cur = totals(householdId, month, member);
+  const prev = totals(householdId, shiftMonth(month, -1), member);
 
   const byCategory = db
     .prepare(
@@ -27,19 +38,19 @@ export function monthlyStats(householdId: number, month: string) {
               SUM(t.amount) AS amount, COUNT(*) AS count,
               (SELECT amount FROM budgets b WHERE b.household_id = t.household_id AND b.category_id = c.id) AS budget
        FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.household_id = ? AND t.type = 'expense' AND substr(t.date,1,7) = ?
+       WHERE t.household_id = ? AND t.type = 'expense' AND substr(t.date,1,7) = ?${mt.sql}
        GROUP BY c.id ORDER BY amount DESC`,
     )
-    .all(householdId, month) as { id: number | null; name: string; amount: number; budget: number | null }[];
+    .all(householdId, month, ...mt.params) as { id: number | null; name: string; amount: number; budget: number | null }[];
 
   const prevByCategory = new Map(
     (
       db
         .prepare(
           `SELECT category_id AS id, SUM(amount) AS amount FROM transactions
-           WHERE household_id = ? AND type = 'expense' AND substr(date,1,7) = ? GROUP BY category_id`,
+           WHERE household_id = ? AND type = 'expense' AND substr(date,1,7) = ?${m.sql} GROUP BY category_id`,
         )
-        .all(householdId, shiftMonth(month, -1)) as { id: number | null; amount: number }[]
+        .all(householdId, shiftMonth(month, -1), ...m.params) as { id: number | null; amount: number }[]
     ).map((r) => [r.id, r.amount]),
   );
 
@@ -47,10 +58,10 @@ export function monthlyStats(householdId: number, month: string) {
     .prepare(
       `SELECT c.name AS category, t.subcategory, SUM(t.amount) AS amount
        FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.household_id = ? AND t.type = 'expense' AND substr(t.date,1,7) = ?
+       WHERE t.household_id = ? AND t.type = 'expense' AND substr(t.date,1,7) = ?${mt.sql}
        GROUP BY t.category_id, t.subcategory ORDER BY amount DESC`,
     )
-    .all(householdId, month);
+    .all(householdId, month, ...mt.params);
 
   const byMember = db
     .prepare(
@@ -65,9 +76,9 @@ export function monthlyStats(householdId: number, month: string) {
   const daily = db
     .prepare(
       `SELECT date, SUM(amount) AS amount FROM transactions
-       WHERE household_id = ? AND type = 'expense' AND substr(date,1,7) = ? GROUP BY date ORDER BY date`,
+       WHERE household_id = ? AND type = 'expense' AND substr(date,1,7) = ?${m.sql} GROUP BY date ORDER BY date`,
     )
-    .all(householdId, month);
+    .all(householdId, month, ...m.params);
 
   const from = shiftMonth(month, -11);
   const trendRows = db
@@ -75,9 +86,9 @@ export function monthlyStats(householdId: number, month: string) {
       `SELECT substr(date,1,7) AS month,
               SUM(CASE WHEN type='income' THEN amount ELSE 0 END) AS income,
               SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) AS expense
-       FROM transactions WHERE household_id = ? AND substr(date,1,7) BETWEEN ? AND ? GROUP BY month`,
+       FROM transactions WHERE household_id = ? AND substr(date,1,7) BETWEEN ? AND ?${m.sql} GROUP BY month`,
     )
-    .all(householdId, from, month) as { month: string; income: number; expense: number }[];
+    .all(householdId, from, month, ...m.params) as { month: string; income: number; expense: number }[];
   const trend = Array.from({ length: 12 }, (_, i) => {
     const m = shiftMonth(from, i);
     return trendRows.find((r) => r.month === m) ?? { month: m, income: 0, expense: 0 };
@@ -86,10 +97,10 @@ export function monthlyStats(householdId: number, month: string) {
   const topMerchants = db
     .prepare(
       `SELECT merchant, SUM(amount) AS amount, COUNT(*) AS count FROM transactions
-       WHERE household_id = ? AND type = 'expense' AND substr(date,1,7) = ? AND merchant <> ''
+       WHERE household_id = ? AND type = 'expense' AND substr(date,1,7) = ? AND merchant <> ''${m.sql}
        GROUP BY merchant ORDER BY amount DESC LIMIT 7`,
     )
-    .all(householdId, month);
+    .all(householdId, month, ...m.params);
 
   // 직전 3개월 평균 대비 이번 달 카테고리 지출이 크게 늘었는지
   const avg3 = new Map(
@@ -97,9 +108,9 @@ export function monthlyStats(householdId: number, month: string) {
       db
         .prepare(
           `SELECT category_id AS id, SUM(amount) / 3.0 AS amount FROM transactions
-           WHERE household_id = ? AND type = 'expense' AND substr(date,1,7) BETWEEN ? AND ? GROUP BY category_id`,
+           WHERE household_id = ? AND type = 'expense' AND substr(date,1,7) BETWEEN ? AND ?${m.sql} GROUP BY category_id`,
         )
-        .all(householdId, shiftMonth(month, -3), shiftMonth(month, -1)) as { id: number | null; amount: number }[]
+        .all(householdId, shiftMonth(month, -3), shiftMonth(month, -1), ...m.params) as { id: number | null; amount: number }[]
     ).map((r) => [r.id, r.amount]),
   );
   const insights: string[] = [];
@@ -108,7 +119,7 @@ export function monthlyStats(householdId: number, month: string) {
     if (a > 0 && c.amount > a * 1.3 && c.amount - a > 50000) {
       insights.push(`${c.name} 지출이 최근 3개월 평균보다 ${Math.round((c.amount / a - 1) * 100)}% 많아요.`);
     }
-    if (c.budget && c.amount > c.budget) {
+    if (member === undefined && c.budget && c.amount > c.budget) {
       insights.push(`${c.name} 예산을 ${(c.amount - c.budget).toLocaleString("ko-KR")}원 초과했어요.`);
     }
   }
@@ -121,7 +132,8 @@ export function monthlyStats(householdId: number, month: string) {
     count: cur.count,
     savingsRate: cur.income ? Math.round(((cur.income - cur.expense) / cur.income) * 1000) / 10 : null,
     prev: { income: prev.income, expense: prev.expense },
-    byCategory: byCategory.map((c) => ({ ...c, prevAmount: prevByCategory.get(c.id) ?? 0 })),
+    // 예산은 가구 전체 기준이라 사람별 보기에서는 숨긴다.
+    byCategory: byCategory.map((c) => ({ ...c, budget: member === undefined ? c.budget : null, prevAmount: prevByCategory.get(c.id) ?? 0 })),
     bySubcategory,
     byMember,
     daily,

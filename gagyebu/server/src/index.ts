@@ -8,8 +8,11 @@ import { login, logout, register, requireAuth } from "./auth.js";
 import { extractTransactions, type ExtractedTx } from "./ai.js";
 import { scheduleSync, sheetsStatus, syncToSheet } from "./sheets.js";
 import { monthlyStats } from "./stats.js";
+import { startBackups } from "./backup.js";
 
 const app = express();
+// 집 PC에서 Tailscale Funnel 같은 HTTPS 프록시 뒤에 둘 때 원래 프로토콜(https)을 인식하게 한다.
+app.set("trust proxy", "loopback");
 app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
 
@@ -404,7 +407,8 @@ app.get(
   "/api/stats",
   wrap((req, res) => {
     const month = String(req.query.month ?? new Date().toISOString().slice(0, 7));
-    res.json(monthlyStats(req.user.householdId, month));
+    const m = req.query.member_id as string | undefined;
+    res.json(monthlyStats(req.user.householdId, month, m === "shared" ? "shared" : m ? Number(m) : undefined));
   }),
 );
 
@@ -448,5 +452,6 @@ if (fs.existsSync(clientDist)) {
   app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(path.join(clientDist, "index.html")));
 }
 
+startBackups();
 const port = Number(process.env.PORT ?? 3001);
 app.listen(port, () => console.log(`가계부 서버: http://localhost:${port}`));

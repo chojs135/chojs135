@@ -186,3 +186,4 @@ form.inline { display: flex; gap: 8px; margin-top: 8px; }
 .review-top .grow { flex: 1 1 160px; }
 .review-top select { flex: 1 1 160px; }
 .review-top input[type='date'] { flex: 0 1 150px; }
+.segmented button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

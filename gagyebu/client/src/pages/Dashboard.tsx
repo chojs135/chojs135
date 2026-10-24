@@ -20,9 +20,11 @@ const tooltipStyle = { borderRadius: 8, border: '1px solid var(--border)', backg
 
 export default function Dashboard({ ctx, goUpload }: { ctx: Ctx; goUpload: () => void }) {
   const [s, setS] = useState<Stats | null>(null)
+  // '' = 우리 전체, 'shared' = 공동, 그 외 = 구성원 id
+  const [who, setWho] = useState('')
   useEffect(() => {
-    api<Stats>(`/stats?month=${ctx.month}`).then(setS)
-  }, [ctx.month])
+    api<Stats>(`/stats?month=${ctx.month}${who ? `&member_id=${who}` : ''}`).then(setS)
+  }, [ctx.month, who])
 
   if (!s) return <div className="muted">불러오는 중…</div>
 
@@ -32,6 +34,19 @@ export default function Dashboard({ ctx, goUpload }: { ctx: Ctx; goUpload: () =>
 
   return (
     <div className="dashboard">
+      <div className="segmented">
+        <button className={who === '' ? 'active' : ''} onClick={() => setWho('')}>
+          👫 전체
+        </button>
+        {ctx.me.members.map((m) => (
+          <button key={m.id} className={who === String(m.id) ? 'active' : ''} onClick={() => setWho(String(m.id))}>
+            {m.id === ctx.me.user.id ? `🙋 ${m.name}` : m.name}
+          </button>
+        ))}
+        <button className={who === 'shared' ? 'active' : ''} onClick={() => setWho('shared')}>
+          🏠 공동
+        </button>
+      </div>
       {s.count === 0 && (
         <div className="card empty">
           <p>이번 달 기록이 아직 없어요.</p>
@@ -149,7 +164,7 @@ export default function Dashboard({ ctx, goUpload }: { ctx: Ctx; goUpload: () =>
               ))}
             </tbody>
           </table>
-          <h3 style={{ marginTop: 20 }}>누가 썼나</h3>
+          <h3 style={{ marginTop: 20 }}>누가 썼나 (우리 전체)</h3>
           <table className="simple">
             <thead>
               <tr>
