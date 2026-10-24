@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, TYPE_LABEL, type Category, type TxType } from '../api'
 import type { Ctx } from '../App'
 
-type Rule = { id: number; keyword: string; type: TxType; category: string; subcategory: string }
-type SheetStatus = { configured: boolean; serviceAccountEmail: string | null; sheetId: string | null; lastSync: { at: string; ok: boolean; message: string } | null }
+type Rule = { keyword: string; type: TxType; category: string; subcategory: string }
 
 function Budgets({ ctx }: { ctx: Ctx }) {
   const [values, setValues] = useState<Record<number, string>>({})
@@ -139,14 +138,14 @@ function Rules() {
       <table className="simple">
         <tbody>
           {rules.map((r) => (
-            <tr key={r.id}>
+            <tr key={r.keyword}>
               <td>"{r.keyword}"</td>
               <td>
                 {TYPE_LABEL[r.type]} › {r.category}
                 {r.subcategory && ` › ${r.subcategory}`}
               </td>
               <td>
-                <button className="icon-btn" aria-label="삭제" onClick={() => api(`/rules/${r.id}`, { method: 'DELETE' }).then(load)}>
+                <button className="icon-btn" aria-label="삭제" onClick={() => api(`/rules/${encodeURIComponent(r.keyword)}`, { method: 'DELETE' }).then(load)}>
                   ✕
                 </button>
               </td>
@@ -158,88 +157,96 @@ function Rules() {
   )
 }
 
-function Sheets() {
-  const [s, setS] = useState<SheetStatus | null>(null)
-  const [input, setInput] = useState('')
+function Members({ ctx }: { ctx: Ctx }) {
+  const [form, setForm] = useState({ name: '', email: '' })
   const [msg, setMsg] = useState('')
-  useEffect(() => {
-    api<SheetStatus>('/sheets').then((x) => {
-      setS(x)
-      setInput(x.sheetId ?? '')
-    })
-  }, [])
-  if (!s) return null
+  async function add(e: React.FormEvent) {
+    e.preventDefault()
+    setMsg('')
+    try {
+      const r = await api<{ shared: boolean }>('/members', { body: form })
+      setMsg(
+        r.shared
+          ? `${form.name}님을 추가하고 구글 시트도 공유했어요. 이 페이지 주소를 보내 주세요.`
+          : `${form.name}님을 추가했어요. 구글 시트의 [공유] 버튼으로 ${form.email}을(를) 편집자로 추가해 주세요.`,
+      )
+      setForm({ name: '', email: '' })
+      ctx.reloadMe()
+    } catch (err) {
+      setMsg((err as Error).message)
+    }
+  }
   return (
     <section className="card">
-      <h3>구글 스프레드시트 연동</h3>
-      {!s.configured ? (
-        <p className="small muted">서버에 GOOGLE_SERVICE_ACCOUNT_KEY가 설정되지 않았어요. README의 "구글 시트 연동" 절차를 따라 설정해 주세요.</p>
-      ) : (
-        <>
-          <p className="small">
-            1) 구글 시트를 만들고 <b>{s.serviceAccountEmail}</b> 을(를) 편집자로 공유하세요.
-            <br />
-            2) 시트 주소를 아래에 붙여 넣으면, 내역이 바뀔 때마다 "거래내역"·"월별요약" 탭이 자동으로 갱신돼요.
-          </p>
-          <form
-            className="inline"
-            onSubmit={async (e) => {
-              e.preventDefault()
-              setS(await api<SheetStatus>('/sheets', { method: 'PUT', body: { sheetId: input } }))
-              setMsg('저장됨')
-            }}
-          >
-            <input className="grow" value={input} onChange={(e) => setInput(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/..." />
-            <button>저장</button>
-          </form>
-          <div className="actions">
-            <span className="small muted">
-              {s.lastSync ? `${s.lastSync.ok ? '✅' : '❌'} ${new Date(s.lastSync.at).toLocaleString('ko-KR')} ${s.lastSync.message}` : msg}
-            </span>
-            <span style={{ flex: 1 }} />
-            <button
-              disabled={!s.sheetId}
-              onClick={async () => {
-                setMsg('동기화 중…')
-                try {
-                  await api('/sheets/sync', { method: 'POST' })
-                } catch (e) {
-                  setMsg((e as Error).message)
-                }
-                setS(await api<SheetStatus>('/sheets'))
-              }}
-            >
-              지금 동기화
-            </button>
-          </div>
-        </>
-      )}
+      <h3>구성원</h3>
+      <table className="simple">
+        <tbody>
+          {ctx.me.members.map((m) => (
+            <tr key={m.id}>
+              <td>{m.name}</td>
+              <td className="muted small">{m.email}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="small muted" style={{ marginTop: 12 }}>
+        배우자의 <b>구글 계정 이메일</b>을 추가하면 같은 가계부를 함께 써요. 각자 자기 구글 계정으로 들어오고, 올린 내역은 올린 사람 것으로 기록돼요.
+      </p>
+      <form className="inline" onSubmit={add}>
+        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="이름" style={{ width: 90 }} required />
+        <input className="grow" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="구글 계정 이메일" required />
+        <button>추가</button>
+      </form>
+      {msg && <p className="small">{msg}</p>}
     </section>
   )
 }
 
-export default function Settings({ ctx, onLogout }: { ctx: Ctx; onLogout: () => void }) {
+function ApiKey({ ctx }: { ctx: Ctx }) {
+  const [key, setKey] = useState('')
+  const [msg, setMsg] = useState('')
+  return (
+    <section className="card">
+      <h3>AI 분석 (Anthropic API 키)</h3>
+      <p className="small">{ctx.me.hasApiKey ? '✅ 설정되어 있어요.' : '⚠️ 아직 없어요. 키가 있어야 문서·사진을 자동으로 분석할 수 있어요.'}</p>
+      <form
+        className="inline"
+        onSubmit={async (e) => {
+          e.preventDefault()
+          await api('/settings', { method: 'PUT', body: { apiKey: key } })
+          setKey('')
+          setMsg('저장했어요.')
+          ctx.reloadMe()
+        }}
+      >
+        <input className="grow" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-... (바꿀 때만 입력)" autoComplete="off" required />
+        <button>저장</button>
+      </form>
+      {msg && <p className="small">{msg}</p>}
+    </section>
+  )
+}
+
+export default function Settings({ ctx }: { ctx: Ctx }) {
   return (
     <div className="settings">
       <section className="card">
-        <h3>우리 가계부</h3>
-        <p>
-          구성원: {ctx.me.members.map((m) => m.name).join(', ')}
+        <h3>{ctx.me.household.name}</h3>
+        <p className="small">
+          로그인: {ctx.me.user.name} ({ctx.me.user.email})
         </p>
-        <p>
-          초대코드 <code className="invite">{ctx.me.household.invite_code}</code>
-          <span className="small muted"> — 배우자가 가입할 때 "초대코드로 참여"에 입력하면 같은 가계부를 함께 써요.</span>
+        <p className="small muted">
+          모든 데이터는 구글 시트에 저장돼요. 시트의 [파일 → 버전 기록]으로 예전 상태를 되돌릴 수도 있어요.
         </p>
-        <div className="actions">
-          <span className="small muted">{ctx.me.user.email}</span>
-          <span style={{ flex: 1 }} />
-          <button onClick={onLogout}>로그아웃</button>
-        </div>
+        <a className="button-link" href={ctx.me.sheetUrl} target="_blank" rel="noreferrer">
+          📗 구글 시트 열기
+        </a>
       </section>
+      <Members ctx={ctx} />
+      <ApiKey ctx={ctx} />
       <Budgets ctx={ctx} />
       <Categories ctx={ctx} />
       <Rules />
-      <Sheets />
     </div>
   )
 }

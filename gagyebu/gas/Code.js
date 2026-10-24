@@ -1,0 +1,919 @@
+/**
+ * 우리집 가계부 — Google Apps Script 서버
+ *
+ * 데이터는 이 스크립트가 연결된 구글 시트의 탭에 저장된다(거래내역, 카테고리, 예산, ...).
+ * 화면(Index.html)은 google.script.run으로 api(method, path, body)를 호출한다.
+ * Claude 분석은 Apps Script의 외부 요청 60초 제한을 피하려고 브라우저에서 직접 호출하고,
+ * 여기서는 분석에 필요한 프롬프트와 분석 결과의 후처리(카테고리 매칭, 규칙, 중복 검사)만 한다.
+ */
+
+var SHEETS = {
+  tx: {
+    name: '거래내역',
+    headers: ['ID', '날짜', '구분', '금액', '카테고리', '세부항목', '가맹점', '내용', '결제수단', '사용자', '메모', '입력방식', '업로드ID', '입력자', '입력일시', '수정일시'],
+  },
+  cat: { name: '카테고리', headers: ['ID', '구분', '이름', '아이콘', '색', '세부항목', '순서'] },
+  budget: { name: '예산', headers: ['카테고리', '월 예산'] },
+  rule: { name: '자동분류규칙', headers: ['키워드', '구분', '카테고리', '세부항목', '수정일시'] },
+  member: { name: '구성원', headers: ['ID', '이메일', '이름', '추가일시'] },
+  upload: { name: '업로드기록', headers: ['ID', '일시', '파일', '문서종류', '요약', '올린사람', '저장건수'] },
+  monthly: { name: '월별요약', headers: ['월', '수입', '지출', '남은 돈', '저축률(%)'] },
+};
+var TYPE_KO = { expense: '지출', income: '수입', transfer: '이체' };
+var KO_TYPE = { 지출: 'expense', 수입: 'income', 이체: 'transfer' };
+var SHARED = '공동';
+var DEFAULT_MODEL = 'claude-opus-5-5';
+
+var DEFAULT_CATEGORIES = [
+  ['expense', '식비', '🍚', '#f97316', ['장보기', '외식', '배달', '카페/간식']],
+  ['expense', '주거/관리비', '🏠', '#0ea5e9', ['관리비', '전기', '수도', '가스/난방', '월세/대출이자', '인터넷/TV', '수선/유지']],
+  ['expense', '생활용품', '🧺', '#14b8a6', ['생필품', '가구/가전', '주방용품']],
+  ['expense', '교통/차량', '🚗', '#6366f1', ['대중교통', '택시', '주유/충전', '주차/통행료', '정비/세차', '자동차보험']],
+  ['expense', '통신', '📱', '#8b5cf6', ['휴대폰']],
+  ['expense', '의료/건강', '💊', '#ef4444', ['병원', '약국', '운동', '건강식품']],
+  ['expense', '의류/미용', '👕', '#ec4899', ['의류', '신발/잡화', '미용실', '화장품']],
+  ['expense', '교육/육아', '📚', '#eab308', ['학원/강의', '도서', '육아용품', '어린이집/학교']],
+  ['expense', '문화/여가', '🎬', '#22c55e', ['여행/숙박', '취미', '구독서비스', '영화/공연', '게임']],
+  ['expense', '경조사/선물', '🎁', '#f43f5e', ['경조사비', '선물', '부모님 용돈', '기부']],
+  ['expense', '보험/세금', '🧾', '#64748b', ['보험료', '세금/공과금', '수수료']],
+  ['expense', '반려동물', '🐾', '#a16207', ['사료/간식', '병원', '용품']],
+  ['expense', '기타지출', '📦', '#9ca3af', []],
+  ['income', '급여', '💼', '#16a34a', ['월급', '상여금']],
+  ['income', '부수입', '💡', '#0d9488', ['사업/프리랜스', '중고거래', '포인트/캐시백']],
+  ['income', '금융수입', '🏦', '#2563eb', ['이자', '배당', '투자수익']],
+  ['income', '환급/지원금', '↩️', '#7c3aed', ['세금환급', '정부지원금', '환불']],
+  ['income', '기타수입', '➕', '#9ca3af', ['용돈', '기타']],
+  // 통계에서 빠지는 돈의 이동. 카드대금 출금이나 내 계좌 간 이체를 지출로 세면 이중 집계가 된다.
+  ['transfer', '이체/저축', '🔁', '#94a3b8', ['카드대금', '내 계좌 이체', '적금/저축', '투자', '대출상환(원금)']],
+];
+
+// ---------------------------------------------------------------- 진입점
+
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('Index')
+    .setTitle('우리집 가계부')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
+    .setFaviconUrl('https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4b0.png');
+}
+
+/** 화면에서 호출하는 유일한 함수. 결과는 JSON 문자열로 돌려준다(Date 등 직렬화 문제 방지). */
+function api(method, path, bodyJson) {
+  try {
+    var body = bodyJson ? JSON.parse(bodyJson) : {};
+    return JSON.stringify({ ok: true, data: route_(method, path, body) });
+  } catch (e) {
+    return JSON.stringify({ ok: false, status: e.status || 500, error: e.message || String(e) });
+  }
+}
+
+function httpError_(status, message) {
+  var e = new Error(message);
+  e.status = status;
+  return e;
+}
+
+// ---------------------------------------------------------------- 시트 접근
+
+function ss_() {
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
+
+function sheet_(key) {
+  var def = SHEETS[key];
+  var sh = ss_().getSheetByName(def.name);
+  if (!sh) {
+    sh = ss_().insertSheet(def.name);
+    sh.getRange(1, 1, 1, def.headers.length).setValues([def.headers]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    if (key === 'tx') {
+      sh.getRange('B:B').setNumberFormat('yyyy-mm-dd');
+      sh.getRange('D:D').setNumberFormat('#,##0');
+    }
+    if (key === 'budget') sh.getRange('B:B').setNumberFormat('#,##0');
+    if (key === 'monthly') sh.getRange('B:D').setNumberFormat('#,##0');
+  }
+  return sh;
+}
+
+/** 시트 전체를 [{헤더: 값, _row: 시트 행 번호}] 로 읽는다. */
+function read_(key) {
+  var sh = sheet_(key);
+  var headers = SHEETS[key].headers;
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var values = sh.getRange(2, 1, last - 1, headers.length).getValues();
+  var out = [];
+  for (var i = 0; i < values.length; i++) {
+    if (values[i].every(function (v) { return v === '' || v === null; })) continue;
+    var o = { _row: i + 2 };
+    for (var j = 0; j < headers.length; j++) o[headers[j]] = values[i][j];
+    out.push(o);
+  }
+  return out;
+}
+
+function toRow_(key, obj) {
+  return SHEETS[key].headers.map(function (h) { return obj[h] === undefined || obj[h] === null ? '' : obj[h]; });
+}
+
+function append_(key, objs) {
+  if (!objs.length) return;
+  var sh = sheet_(key);
+  var rows = objs.map(function (o) { return toRow_(key, o); });
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+}
+
+function writeRow_(key, rowNum, obj) {
+  sheet_(key).getRange(rowNum, 1, 1, SHEETS[key].headers.length).setValues([toRow_(key, obj)]);
+}
+
+/** 여러 행을 지울 때는 아래쪽부터 지워야 행 번호가 밀리지 않는다. */
+function deleteRows_(key, rowNums) {
+  var sh = sheet_(key);
+  rowNums.slice().sort(function (a, b) { return b - a; }).forEach(function (r) { sh.deleteRow(r); });
+}
+
+function withLock_(fn) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function tz_() {
+  return ss_().getSpreadsheetTimeZone() || 'Asia/Seoul';
+}
+
+/** 시트가 날짜 문자열을 Date로 바꿔 저장하므로 읽을 때 다시 YYYY-MM-DD로 맞춘다. */
+function ymd_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, tz_(), 'yyyy-MM-dd');
+  return String(v || '').slice(0, 10);
+}
+
+function now_() {
+  return Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss');
+}
+
+function props_() {
+  return PropertiesService.getScriptProperties();
+}
+
+function nextId_(rows) {
+  var max = 0;
+  rows.forEach(function (r) { max = Math.max(max, Number(r.ID) || 0); });
+  return max + 1;
+}
+
+// ---------------------------------------------------------------- 구성원 / 인증
+
+function currentEmail_() {
+  var email = Session.getActiveUser().getEmail();
+  if (!email) {
+    throw httpError_(401, '구글 계정 이메일을 확인할 수 없어요. 웹 앱 배포 설정이 "실행: 웹 앱에 액세스하는 사용자"인지 확인해 주세요.');
+  }
+  return String(email).toLowerCase();
+}
+
+function members_() {
+  return read_('member').map(function (m) {
+    return { id: Number(m.ID), email: String(m['이메일']).toLowerCase(), name: String(m['이름']) };
+  });
+}
+
+function requireMember_() {
+  var email = currentEmail_();
+  var me = members_().filter(function (m) { return m.email === email; })[0];
+  if (!me) throw httpError_(403, email + ' 계정은 이 가계부의 구성원이 아니에요. 가계부를 만든 사람에게 구성원 추가를 요청해 주세요.');
+  return me;
+}
+
+function memberNameById_(members, id) {
+  if (id === null || id === undefined || id === '') return SHARED;
+  var m = members.filter(function (x) { return x.id === Number(id); })[0];
+  return m ? m.name : SHARED;
+}
+
+function memberIdByName_(members, name) {
+  var m = members.filter(function (x) { return x.name === name; })[0];
+  return m ? m.id : null;
+}
+
+// ---------------------------------------------------------------- 카테고리
+
+function categories_() {
+  return read_('cat')
+    .map(function (c) {
+      return {
+        id: Number(c.ID),
+        type: KO_TYPE[c['구분']] || 'expense',
+        name: String(c['이름']),
+        icon: String(c['아이콘'] || ''),
+        color: String(c['색'] || '#9ca3af'),
+        subcategories: String(c['세부항목'] || '').split(',').map(function (s) { return s.trim(); }).filter(String),
+        sort: Number(c['순서']) || 0,
+        _row: c._row,
+      };
+    })
+    .sort(function (a, b) { return a.sort - b.sort || a.id - b.id; });
+}
+
+function stripRow_(o) {
+  var c = {};
+  for (var k in o) if (k !== '_row') c[k] = o[k];
+  return c;
+}
+
+function findCategory_(cats, type, name) {
+  return cats.filter(function (c) { return c.type === type && c.name === name; })[0] || null;
+}
+
+function seedCategories_() {
+  if (read_('cat').length) return;
+  append_('cat', DEFAULT_CATEGORIES.map(function (c, i) {
+    return { ID: i + 1, 구분: TYPE_KO[c[0]], 이름: c[1], 아이콘: c[2], 색: c[3], 세부항목: c[4].join(', '), 순서: i + 1 };
+  }));
+}
+
+// ---------------------------------------------------------------- 거래
+
+/** 시트 행 → 화면용 거래 객체 */
+function txFromRow_(r, cats, members) {
+  var type = KO_TYPE[r['구분']] || 'expense';
+  var cat = findCategory_(cats, type, String(r['카테고리']));
+  return {
+    id: Number(r.ID),
+    date: ymd_(r['날짜']),
+    type: type,
+    amount: Number(r['금액']) || 0,
+    category_id: cat ? cat.id : null,
+    category_name: String(r['카테고리'] || ''),
+    subcategory: String(r['세부항목'] || ''),
+    merchant: String(r['가맹점'] || ''),
+    description: String(r['내용'] || ''),
+    payment_method: String(r['결제수단'] || ''),
+    member_id: memberIdByName_(members, String(r['사용자'])),
+    memo: String(r['메모'] || ''),
+    source: r['입력방식'] === '자동' ? 'upload' : 'manual',
+    created_by_name: String(r['입력자'] || ''),
+    _row: r._row,
+  };
+}
+
+function allTx_() {
+  var cats = categories_();
+  var members = members_();
+  return read_('tx').map(function (r) { return txFromRow_(r, cats, members); });
+}
+
+function validateTx_(t) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t.date || '')) throw httpError_(400, '날짜 형식이 올바르지 않습니다.');
+  if (!TYPE_KO[t.type]) throw httpError_(400, '구분이 올바르지 않습니다.');
+  if (!(Number(t.amount) > 0)) throw httpError_(400, '금액을 확인해 주세요.');
+}
+
+/** 화면용 거래 객체 → 시트 행 */
+function txToRow_(t, cats, members, extra) {
+  var cat = cats.filter(function (c) { return c.id === Number(t.category_id); })[0];
+  return Object.assign(
+    {
+      날짜: t.date,
+      구분: TYPE_KO[t.type],
+      금액: Math.round(Math.abs(Number(t.amount))),
+      카테고리: cat ? cat.name : '',
+      세부항목: t.subcategory || '',
+      가맹점: t.merchant || '',
+      내용: t.description || '',
+      결제수단: t.payment_method || '',
+      사용자: memberNameById_(members, t.member_id),
+      메모: t.memo || '',
+    },
+    extra,
+  );
+}
+
+/** 가맹점명에서 규칙 키워드를 만든다. 지점명/괄호/숫자를 떼서 "스타벅스 강남점" → "스타벅스". */
+function merchantKey_(merchant) {
+  return String(merchant)
+    .replace(/\(.*?\)|\[.*?\]/g, '')
+    .replace(/(주식회사|㈜)/g, '')
+    .replace(/\s*[가-힣A-Za-z0-9]*점$/, '')
+    .replace(/[0-9\-_*#]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .join(' ');
+}
+
+function learnRule_(merchant, type, categoryName, subcategory) {
+  var key = merchantKey_(merchant);
+  if (!key || key.length < 2 || !categoryName) return;
+  var rules = read_('rule');
+  var row = { 키워드: key, 구분: TYPE_KO[type], 카테고리: categoryName, 세부항목: subcategory || '', 수정일시: now_() };
+  var existing = rules.filter(function (r) { return String(r['키워드']) === key; })[0];
+  if (existing) writeRow_('rule', existing._row, row);
+  else append_('rule', [row]);
+}
+
+function rules_() {
+  return read_('rule').map(function (r) {
+    return { keyword: String(r['키워드']), type: KO_TYPE[r['구분']] || 'expense', category: String(r['카테고리']), subcategory: String(r['세부항목'] || ''), updated: String(r['수정일시']) };
+  });
+}
+
+/** 월별요약 탭을 다시 계산한다. 거래가 바뀔 때마다 호출. */
+function refreshMonthly_() {
+  var by = {};
+  allTx_().forEach(function (t) {
+    var m = t.date.slice(0, 7);
+    by[m] = by[m] || { income: 0, expense: 0 };
+    if (t.type === 'income') by[m].income += t.amount;
+    if (t.type === 'expense') by[m].expense += t.amount;
+  });
+  var months = Object.keys(by).sort().reverse();
+  var sh = sheet_('monthly');
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, SHEETS.monthly.headers.length).clearContent();
+  append_('monthly', months.map(function (m) {
+    var v = by[m];
+    return { 월: m, 수입: v.income, 지출: v.expense, '남은 돈': v.income - v.expense, '저축률(%)': v.income ? Math.round(((v.income - v.expense) / v.income) * 1000) / 10 : '' };
+  }));
+}
+
+// ---------------------------------------------------------------- 라우터
+
+function parseQuery_(qs) {
+  var q = {};
+  (qs || '').split('&').forEach(function (kv) {
+    if (!kv) return;
+    var i = kv.indexOf('=');
+    var k = decodeURIComponent(i < 0 ? kv : kv.slice(0, i));
+    q[k] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' '));
+  });
+  return q;
+}
+
+function route_(method, path, body) {
+  var qi = path.indexOf('?');
+  var p = qi < 0 ? path : path.slice(0, qi);
+  var q = parseQuery_(qi < 0 ? '' : path.slice(qi + 1));
+  var seg = p.split('/').filter(String);
+  var M = method.toUpperCase();
+  var key = M + ' /' + seg[0] + (seg[1] ? '/' + seg[1] : '');
+
+  // 로그인 전에도 쓰는 두 경로
+  if (key === 'GET /me') return me_();
+  if (key === 'POST /setup') return setup_(body);
+
+  var me = requireMember_();
+  var id = seg[1];
+
+  switch (M + ' /' + seg[0]) {
+    case 'GET /categories':
+      return categories_().map(stripRow_);
+    case 'POST /categories':
+      return withLock_(function () { return createCategory_(body); });
+    case 'PUT /categories':
+      return withLock_(function () { return updateCategory_(Number(id), body); });
+    case 'DELETE /categories':
+      return withLock_(function () { return deleteCategory_(Number(id)); });
+
+    case 'GET /budgets':
+      return budgets_();
+    case 'PUT /budgets':
+      return withLock_(function () { return saveBudgets_(body.items || []); });
+
+    case 'GET /transactions':
+      return listTx_(q);
+    case 'POST /transactions':
+      return withLock_(function () { return createTx_(body, me); });
+    case 'PUT /transactions':
+      return withLock_(function () { return updateTx_(Number(id), body); });
+    case 'DELETE /transactions':
+      return withLock_(function () { return deleteTx_(Number(id)); });
+
+    case 'GET /analysis-context':
+      return analysisContext_();
+    case 'POST /uploads':
+      if (id === 'prepare') return prepareUpload_(body);
+      if (id === 'commit') return withLock_(function () { return commitUpload_(body, me); });
+      break;
+    case 'GET /uploads':
+      return read_('upload').reverse().slice(0, 50).map(function (u) {
+        return { id: Number(u.ID), created_at: String(u['일시']), filenames: String(u['파일']), doc_type: String(u['문서종류']), summary: String(u['요약']), created_by_name: String(u['올린사람']), tx_count: Number(u['저장건수']) || 0 };
+      });
+
+    case 'GET /stats':
+      return monthlyStats_(q.month, q.member_id === 'shared' ? 'shared' : q.member_id ? Number(q.member_id) : undefined);
+
+    case 'GET /rules':
+      return rules_();
+    case 'DELETE /rules':
+      return withLock_(function () {
+        var kw = decodeURIComponent(id);
+        deleteRows_('rule', read_('rule').filter(function (r) { return String(r['키워드']) === kw; }).map(function (r) { return r._row; }));
+        return true;
+      });
+
+    case 'POST /members':
+      return withLock_(function () { return addMember_(body); });
+    case 'PUT /settings':
+      return saveSettings_(body);
+  }
+  throw httpError_(404, '알 수 없는 요청: ' + M + ' ' + p);
+}
+
+// ---------------------------------------------------------------- 핸들러
+
+function me_() {
+  var email = currentEmail_();
+  var members = members_();
+  var p = props_();
+  var base = { email: email, sheetUrl: ss_().getUrl() };
+  if (!members.length) return Object.assign(base, { state: 'setup' });
+  var me = members.filter(function (m) { return m.email === email; })[0];
+  if (!me) return Object.assign(base, { state: 'not_member' });
+  return Object.assign(base, {
+    state: 'ok',
+    user: { id: me.id, name: me.name, email: me.email },
+    household: { name: p.getProperty('HOUSEHOLD_NAME') || '우리집 가계부' },
+    members: members.map(function (m) { return { id: m.id, name: m.name, email: m.email }; }),
+    hasApiKey: !!p.getProperty('ANTHROPIC_API_KEY'),
+  });
+}
+
+function setup_(body) {
+  return withLock_(function () {
+    if (members_().length) throw httpError_(409, '이미 설정된 가계부예요.');
+    var email = currentEmail_();
+    if (!body.name) throw httpError_(400, '이름을 입력해 주세요.');
+    seedCategories_();
+    ['tx', 'budget', 'rule', 'upload', 'monthly'].forEach(sheet_);
+    append_('member', [{ ID: 1, 이메일: email, 이름: body.name, 추가일시: now_() }]);
+    if (body.householdName) props_().setProperty('HOUSEHOLD_NAME', body.householdName);
+    if (body.apiKey) props_().setProperty('ANTHROPIC_API_KEY', String(body.apiKey).trim());
+    // 시트를 처음 만들 때 생긴 빈 기본 탭은 정리한다.
+    var ours = Object.keys(SHEETS).map(function (k) { return SHEETS[k].name; });
+    ss_().getSheets().forEach(function (sh) {
+      if (ours.indexOf(sh.getName()) < 0 && sh.getLastRow() <= 1) ss_().deleteSheet(sh);
+    });
+    return true;
+  });
+}
+
+function addMember_(body) {
+  var email = String(body.email || '').trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+$/.test(email) || !body.name) throw httpError_(400, '이름과 구글 계정 이메일을 입력해 주세요.');
+  var members = members_();
+  if (members.some(function (m) { return m.email === email; })) throw httpError_(409, '이미 구성원이에요.');
+  append_('member', [{ ID: nextId_(read_('member')), 이메일: email, 이름: body.name, 추가일시: now_() }]);
+  // 웹 앱이 "접속한 사용자 권한"으로 실행되므로 배우자도 이 시트의 편집 권한이 있어야 한다.
+  var shared = true;
+  try {
+    ss_().addEditor(email);
+  } catch (e) {
+    shared = false;
+  }
+  return { shared: shared };
+}
+
+function saveSettings_(body) {
+  if (body.apiKey) props_().setProperty('ANTHROPIC_API_KEY', String(body.apiKey).trim());
+  if (body.householdName) props_().setProperty('HOUSEHOLD_NAME', body.householdName);
+  return true;
+}
+
+function createCategory_(body) {
+  if (!body.name || !TYPE_KO[body.type]) throw httpError_(400, '입력값을 확인해 주세요.');
+  var cats = categories_();
+  if (findCategory_(cats, body.type, body.name)) throw httpError_(409, '같은 이름의 카테고리가 있어요.');
+  var rows = read_('cat');
+  var id = nextId_(rows);
+  append_('cat', [{ ID: id, 구분: TYPE_KO[body.type], 이름: body.name, 아이콘: body.icon || '🏷️', 색: body.color || '#9ca3af', 세부항목: (body.subcategories || []).join(', '), 순서: rows.length + 1 }]);
+  return { id: id };
+}
+
+function updateCategory_(id, body) {
+  var c = categories_().filter(function (x) { return x.id === id; })[0];
+  if (!c) throw httpError_(404, '카테고리를 찾을 수 없어요.');
+  var newName = body.name || c.name;
+  if (newName !== c.name) {
+    // 거래내역/규칙/예산은 카테고리 이름으로 저장되므로 이름을 바꾸면 함께 바꾼다.
+    renameIn_('tx', '카테고리', c.name, newName, function (r) { return KO_TYPE[r['구분']] === c.type; });
+    renameIn_('rule', '카테고리', c.name, newName, function (r) { return KO_TYPE[r['구분']] === c.type; });
+    if (c.type === 'expense') renameIn_('budget', '카테고리', c.name, newName, function () { return true; });
+  }
+  writeRow_('cat', c._row, {
+    ID: c.id,
+    구분: TYPE_KO[c.type],
+    이름: newName,
+    아이콘: body.icon !== undefined ? body.icon : c.icon,
+    색: body.color || c.color,
+    세부항목: (body.subcategories || c.subcategories).join(', '),
+    순서: c.sort,
+  });
+  return true;
+}
+
+function renameIn_(key, col, from, to, match) {
+  var sh = sheet_(key);
+  var colIdx = SHEETS[key].headers.indexOf(col) + 1;
+  read_(key).forEach(function (r) {
+    if (String(r[col]) === from && match(r)) sh.getRange(r._row, colIdx).setValue(to);
+  });
+}
+
+function deleteCategory_(id) {
+  var c = categories_().filter(function (x) { return x.id === id; })[0];
+  if (!c) return true;
+  // 기존 거래는 남기고 카테고리만 비운다(미분류).
+  renameIn_('tx', '카테고리', c.name, '', function (r) { return KO_TYPE[r['구분']] === c.type; });
+  deleteRows_('rule', read_('rule').filter(function (r) { return String(r['카테고리']) === c.name && KO_TYPE[r['구분']] === c.type; }).map(function (r) { return r._row; }));
+  if (c.type === 'expense') deleteRows_('budget', read_('budget').filter(function (r) { return String(r['카테고리']) === c.name; }).map(function (r) { return r._row; }));
+  deleteRows_('cat', [c._row]);
+  return true;
+}
+
+function budgets_() {
+  var cats = categories_();
+  return read_('budget')
+    .map(function (b) {
+      var c = findCategory_(cats, 'expense', String(b['카테고리']));
+      return c ? { category_id: c.id, amount: Number(b['월 예산']) || 0 } : null;
+    })
+    .filter(Boolean);
+}
+
+function saveBudgets_(items) {
+  var cats = categories_();
+  var rows = read_('budget');
+  items.forEach(function (it) {
+    var c = cats.filter(function (x) { return x.id === Number(it.category_id); })[0];
+    if (!c) return;
+    var existing = rows.filter(function (r) { return String(r['카테고리']) === c.name; })[0];
+    var amount = Math.round(Number(it.amount) || 0);
+    if (existing && amount > 0) writeRow_('budget', existing._row, { 카테고리: c.name, '월 예산': amount });
+    else if (!existing && amount > 0) append_('budget', [{ 카테고리: c.name, '월 예산': amount }]);
+  });
+  // 0으로 지운 예산은 마지막에 한꺼번에 삭제(행 번호가 밀리지 않게)
+  var remove = [];
+  items.forEach(function (it) {
+    var c = cats.filter(function (x) { return x.id === Number(it.category_id); })[0];
+    if (!c || Number(it.amount) > 0) return;
+    rows.forEach(function (r) { if (String(r['카테고리']) === c.name) remove.push(r._row); });
+  });
+  deleteRows_('budget', remove);
+  return true;
+}
+
+function listTx_(q) {
+  var rows = allTx_().filter(function (t) {
+    if (q.month && t.date.slice(0, 7) !== q.month) return false;
+    if (q.type && t.type !== q.type) return false;
+    if (q.category_id && t.category_id !== Number(q.category_id)) return false;
+    if (q.member_id === 'shared' && t.member_id !== null) return false;
+    if (q.member_id && q.member_id !== 'shared' && t.member_id !== Number(q.member_id)) return false;
+    if (q.q) {
+      var s = (t.merchant + ' ' + t.description + ' ' + t.memo).toLowerCase();
+      if (s.indexOf(q.q.toLowerCase()) < 0) return false;
+    }
+    return true;
+  });
+  rows.sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id; });
+  return rows.slice(0, 2000).map(stripRow_);
+}
+
+function createTx_(t, me) {
+  validateTx_(t);
+  var cats = categories_();
+  var members = members_();
+  var id = nextId_(read_('tx'));
+  var row = txToRow_(t, cats, members, { ID: id, 입력방식: '수기', 입력자: me.name, 입력일시: now_(), 수정일시: now_() });
+  append_('tx', [row]);
+  if (t.merchant && row['카테고리']) learnRule_(t.merchant, t.type, row['카테고리'], row['세부항목']);
+  refreshMonthly_();
+  return { id: id };
+}
+
+function updateTx_(id, t) {
+  validateTx_(t);
+  var before = read_('tx').filter(function (r) { return Number(r.ID) === id; })[0];
+  if (!before) throw httpError_(404, '내역을 찾을 수 없습니다.');
+  var row = txToRow_(t, categories_(), members_(), {
+    ID: id,
+    입력방식: before['입력방식'],
+    업로드ID: before['업로드ID'],
+    입력자: before['입력자'],
+    입력일시: before['입력일시'],
+    수정일시: now_(),
+  });
+  writeRow_('tx', before._row, row);
+  // 사용자가 분류를 고쳤으면 다음부터 같은 가맹점은 그렇게 분류한다.
+  if (t.merchant && row['카테고리'] && (String(before['카테고리']) !== row['카테고리'] || String(before['세부항목']) !== row['세부항목'])) {
+    learnRule_(t.merchant, t.type, row['카테고리'], row['세부항목']);
+  }
+  refreshMonthly_();
+  return true;
+}
+
+function deleteTx_(id) {
+  deleteRows_('tx', read_('tx').filter(function (r) { return Number(r.ID) === id; }).map(function (r) { return r._row; }));
+  refreshMonthly_();
+  return true;
+}
+
+// ---------------------------------------------------------------- AI 업로드
+
+function analysisContext_() {
+  var apiKey = props_().getProperty('ANTHROPIC_API_KEY');
+  if (!apiKey) throw httpError_(400, 'Anthropic API 키가 설정되지 않았어요. 설정 화면에서 입력해 주세요.');
+  var cats = categories_();
+  var names = [];
+  cats.forEach(function (c) { if (names.indexOf(c.name) < 0) names.push(c.name); });
+  return {
+    apiKey: apiKey,
+    model: props_().getProperty('CLAUDE_MODEL') || DEFAULT_MODEL,
+    system: systemPrompt_(cats, rules_()),
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['document_type', 'summary', 'transactions'],
+      properties: {
+        document_type: { type: 'string' },
+        summary: { type: 'string' },
+        transactions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['date', 'type', 'amount', 'merchant', 'description', 'category', 'subcategory', 'payment_method', 'confidence', 'note'],
+            properties: {
+              date: { type: 'string' },
+              type: { type: 'string', enum: ['expense', 'income', 'transfer'] },
+              amount: { type: 'number' },
+              merchant: { type: 'string' },
+              description: { type: 'string' },
+              category: { type: 'string', enum: names },
+              subcategory: { type: 'string' },
+              payment_method: { type: 'string' },
+              confidence: { type: 'number' },
+              note: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function systemPrompt_(cats, rules) {
+  function list(type) {
+    return cats
+      .filter(function (c) { return c.type === type; })
+      .map(function (c) { return '- ' + c.name + (c.subcategories.length ? ': ' + c.subcategories.join(', ') : ''); })
+      .join('\n');
+  }
+  var ruleText = rules.length
+    ? '## 이 가구가 직접 지정한 가맹점 규칙 (최우선 적용)\n' +
+      rules.slice(0, 300).map(function (r) { return '- "' + r.keyword + '" → ' + r.category + (r.subcategory ? ' / ' + r.subcategory : ''); }).join('\n') + '\n'
+    : '';
+  var today = Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
+  return [
+    '당신은 한국 가정의 가계부 정리를 돕는 회계 도우미입니다. 사용자가 올린 은행/카드 거래내역서(PDF·엑셀·CSV), 영수증, 아파트 관리비 고지서, 급여명세서 등의 스크린샷이나 문서에서 거래를 빠짐없이 뽑아 분류합니다.',
+    '',
+    '## 분류 기준',
+    'type은 셋 중 하나입니다.',
+    '- expense(지출): 실제로 돈을 쓴 것.',
+    '- income(수입): 급여, 이자, 환급 등 들어온 돈.',
+    '- transfer(이체): 가계의 순자산이 변하지 않는 돈의 이동. 통계에서 제외됩니다. 신용카드 대금 출금, 본인/배우자 명의 계좌 간 이체, 적금·저축·투자 계좌로 이체, 대출 원금 상환이 여기에 해당합니다. 카드대금을 지출로 잡으면 카드 내역과 이중으로 집계되므로 반드시 transfer로 분류하세요.',
+    '',
+    'category는 아래 목록의 이름 중 하나를 정확히 그대로 쓰고, subcategory는 해당 카테고리의 세부항목 중 하나(없으면 빈 문자열)를 씁니다.',
+    '',
+    '지출 카테고리:\n' + list('expense'),
+    '',
+    '수입 카테고리:\n' + list('income'),
+    '',
+    '이체 카테고리:\n' + list('transfer'),
+    '',
+    ruleText,
+    '## 문서 유형별 처리',
+    '- 은행/카드 거래내역: 한 줄이 한 거래입니다. 출금은 expense 또는 transfer, 입금은 income 또는 transfer입니다. 승인 취소(취소/환불) 건은 원거래와 상쇄되도록 income/환급/지원금/환불로 기록하세요. 잔액, 합계, 소계 줄은 거래가 아니므로 제외합니다.',
+    '- 아파트 관리비 고지서: 항목별(일반관리비, 전기료, 수도료, 난방비, 급탕비, 경비비, 청소비 등)로 나눠 각각 주거/관리비 아래의 알맞은 세부항목으로 기록하세요. 전기·수도·가스/난방이 아닌 공용 항목은 "관리비"로 묶어 하나로 합쳐도 됩니다. 항목 합계는 고지서의 당월 부과액과 같아야 합니다. 날짜는 납부 마감일(없으면 고지 월의 말일)을 씁니다. 연체료·미납액 같은 이전 달 금액은 제외합니다.',
+    '- 영수증: 결제 1건을 하나의 거래로 기록합니다. 품목이 여러 카테고리에 걸쳐 크게 나뉘면(예: 마트에서 식료품과 가전) 나눠도 됩니다.',
+    '- 급여명세서: 실수령액을 급여 수입 1건으로 기록합니다.',
+    '',
+    '## 형식',
+    '- date는 YYYY-MM-DD. 연도가 없으면 문서의 다른 날짜나 오늘(' + today + ')을 기준으로 가장 그럴듯한 연도를 고릅니다.',
+    '- amount는 원 단위의 양의 정수입니다(부호는 type으로 표현).',
+    '- merchant는 가맹점/상대방 이름을 문서에 적힌 그대로, description은 무엇에 쓴 돈인지 짧은 한국어 설명입니다.',
+    '- payment_method는 카드사/은행/결제수단 이름(예: "신한카드", "국민은행 입출금", "현금")이고 모르면 빈 문자열입니다.',
+    '- confidence는 분류에 대한 확신도 0~1입니다. 읽기 어렵거나 추측이 섞이면 낮게 주고 note에 이유를 적습니다.',
+    '- document_type은 문서 종류(예: "카드 이용내역", "관리비 고지서"), summary는 한두 문장 요약(기간, 건수, 합계)입니다.',
+    '- 문서에 거래가 없으면 transactions를 빈 배열로 두고 summary에 이유를 적습니다.',
+  ].join('\n');
+}
+
+/** Claude가 돌려준 결과를 카테고리 ID로 바꾸고, 가맹점 규칙과 중복 여부를 반영한다. */
+function prepareUpload_(body) {
+  var ex = body.extraction || {};
+  var cats = categories_();
+  var rules = rules_();
+  var existing = {};
+  allTx_().forEach(function (t) { existing[t.date + '|' + t.amount + '|' + t.type] = true; });
+  var memberId = body.member_id ? Number(body.member_id) : null;
+
+  var items = (ex.transactions || []).map(function (t) {
+    var type = TYPE_KO[t.type] ? t.type : 'expense';
+    var cat =
+      findCategory_(cats, type, t.category) ||
+      cats.filter(function (c) { return c.name === t.category; })[0] ||
+      cats.filter(function (c) { return c.type === type && c.name.indexOf('기타') === 0; })[0] ||
+      cats.filter(function (c) { return c.type === type; })[0] ||
+      null;
+    if (cat && cat.type !== type) type = cat.type;
+    var sub = cat && cat.subcategories.indexOf(t.subcategory) >= 0 ? t.subcategory : '';
+    // AI가 프롬프트의 규칙을 놓쳤더라도 여기서 한 번 더 강제한다.
+    var rule = rules.filter(function (r) { return String(t.merchant || '').indexOf(r.keyword) >= 0; })[0];
+    var ruleCat = rule ? findCategory_(cats, rule.type, rule.category) : null;
+    if (ruleCat) {
+      type = ruleCat.type;
+      cat = ruleCat;
+      sub = rule.subcategory;
+    }
+    var amount = Math.round(Math.abs(Number(t.amount) || 0));
+    var dup = !!existing[t.date + '|' + amount + '|' + type];
+    return {
+      date: t.date,
+      type: type,
+      amount: amount,
+      category_id: cat ? cat.id : null,
+      subcategory: sub,
+      merchant: t.merchant || '',
+      description: t.description || '',
+      payment_method: t.payment_method || '',
+      member_id: memberId,
+      memo: '',
+      confidence: Number(t.confidence) || 0,
+      note: t.note || '',
+      duplicate: dup,
+      rule_applied: !!ruleCat,
+      ai_category_id: cat ? cat.id : null,
+      ai_subcategory: sub,
+      include: !dup,
+    };
+  });
+  return { document_type: ex.document_type || '', summary: ex.summary || '', items: items };
+}
+
+function commitUpload_(body, me) {
+  var items = (body.items || []).filter(function (i) { return i.include; });
+  items.forEach(function (i) {
+    try {
+      validateTx_(i);
+    } catch (e) {
+      throw httpError_(400, (i.merchant || i.date) + ': ' + e.message);
+    }
+  });
+  var cats = categories_();
+  var members = members_();
+  var uploadId = nextId_(read_('upload'));
+  var id = nextId_(read_('tx'));
+  var stamp = now_();
+  var rows = items.map(function (i) {
+    return txToRow_(i, cats, members, { ID: id++, 입력방식: '자동', 업로드ID: uploadId, 입력자: me.name, 입력일시: stamp, 수정일시: stamp });
+  });
+  append_('tx', rows);
+  items.forEach(function (i, k) {
+    if (i.merchant && rows[k]['카테고리'] && (Number(i.category_id) !== Number(i.ai_category_id) || (i.subcategory || '') !== (i.ai_subcategory || ''))) {
+      learnRule_(i.merchant, i.type, rows[k]['카테고리'], rows[k]['세부항목']);
+    }
+  });
+  append_('upload', [{ ID: uploadId, 일시: stamp, 파일: (body.filenames || []).join(', '), 문서종류: body.document_type || '', 요약: body.summary || '', 올린사람: me.name, 저장건수: items.length }]);
+  refreshMonthly_();
+  return { saved: items.length };
+}
+
+// ---------------------------------------------------------------- 통계
+
+function shiftMonth_(month, delta) {
+  var y = Number(month.slice(0, 4));
+  var m = Number(month.slice(5, 7)) - 1 + delta;
+  y += Math.floor(m / 12);
+  m = ((m % 12) + 12) % 12;
+  return y + '-' + (m < 9 ? '0' : '') + (m + 1);
+}
+
+function monthlyStats_(month, member) {
+  month = month || Utilities.formatDate(new Date(), tz_(), 'yyyy-MM');
+  var cats = categories_();
+  var members = members_();
+  var all = allTx_();
+  var mine = all.filter(function (t) {
+    if (member === undefined) return true;
+    if (member === 'shared') return t.member_id === null;
+    return t.member_id === member;
+  });
+  function inMonth(list, m) { return list.filter(function (t) { return t.date.slice(0, 7) === m; }); }
+  function sum(list, type) { return list.filter(function (t) { return t.type === type; }).reduce(function (a, t) { return a + t.amount; }, 0); }
+
+  var cur = inMonth(mine, month);
+  var prevMonth = shiftMonth_(month, -1);
+  var prev = inMonth(mine, prevMonth);
+  var income = sum(cur, 'income');
+  var expense = sum(cur, 'expense');
+
+  var budgets = {};
+  if (member === undefined) budgets_().forEach(function (b) { budgets[b.category_id] = b.amount; });
+
+  function groupBy(list, keyFn) {
+    var g = {};
+    list.forEach(function (t) {
+      var k = keyFn(t);
+      g[k] = g[k] || { amount: 0, count: 0 };
+      g[k].amount += t.amount;
+      g[k].count += 1;
+    });
+    return g;
+  }
+
+  var curExp = cur.filter(function (t) { return t.type === 'expense'; });
+  var prevCat = groupBy(prev.filter(function (t) { return t.type === 'expense'; }), function (t) { return String(t.category_id); });
+  var last3 = mine.filter(function (t) {
+    var m = t.date.slice(0, 7);
+    return t.type === 'expense' && m >= shiftMonth_(month, -3) && m <= prevMonth;
+  });
+  var avg3 = groupBy(last3, function (t) { return String(t.category_id); });
+
+  var catGroups = groupBy(curExp, function (t) { return String(t.category_id); });
+  var byCategory = Object.keys(catGroups)
+    .map(function (k) {
+      var c = cats.filter(function (x) { return String(x.id) === k; })[0];
+      return {
+        id: c ? c.id : null,
+        name: c ? c.name : '미분류',
+        icon: c ? c.icon : '',
+        color: c ? c.color : '#9ca3af',
+        amount: catGroups[k].amount,
+        count: catGroups[k].count,
+        budget: c && budgets[c.id] ? budgets[c.id] : null,
+        prevAmount: prevCat[k] ? prevCat[k].amount : 0,
+      };
+    })
+    .sort(function (a, b) { return b.amount - a.amount; });
+
+  var subGroups = groupBy(curExp, function (t) { return (t.category_name || '미분류') + '|' + t.subcategory; });
+  var bySubcategory = Object.keys(subGroups)
+    .map(function (k) { var p = k.split('|'); return { category: p[0], subcategory: p[1], amount: subGroups[k].amount }; })
+    .sort(function (a, b) { return b.amount - a.amount; });
+
+  // 사람별 합계는 보기 전환과 무관하게 항상 가구 전체 기준
+  var everyone = inMonth(all, month);
+  var byMember = [{ id: null, name: SHARED }].concat(members).map(function (m) {
+    var list = everyone.filter(function (t) { return t.member_id === (m.id === null ? null : m.id); });
+    return { name: m.name, expense: sum(list, 'expense'), income: sum(list, 'income') };
+  }).filter(function (m) { return m.expense || m.income; });
+
+  var dayGroups = groupBy(curExp, function (t) { return t.date; });
+  var daily = Object.keys(dayGroups).sort().map(function (d) { return { date: d, amount: dayGroups[d].amount }; });
+
+  var trend = [];
+  for (var i = 11; i >= 0; i--) {
+    var m = shiftMonth_(month, -i);
+    var list = inMonth(mine, m);
+    trend.push({ month: m, income: sum(list, 'income'), expense: sum(list, 'expense') });
+  }
+
+  var merchGroups = groupBy(curExp.filter(function (t) { return t.merchant; }), function (t) { return t.merchant; });
+  var topMerchants = Object.keys(merchGroups)
+    .map(function (k) { return { merchant: k, amount: merchGroups[k].amount, count: merchGroups[k].count }; })
+    .sort(function (a, b) { return b.amount - a.amount; })
+    .slice(0, 7);
+
+  // 직전 3개월 평균 대비 크게 늘었거나 예산을 넘긴 카테고리
+  var insights = [];
+  byCategory.forEach(function (c) {
+    var a = avg3[String(c.id)] ? avg3[String(c.id)].amount / 3 : 0;
+    if (a > 0 && c.amount > a * 1.3 && c.amount - a > 50000) {
+      insights.push(c.name + ' 지출이 최근 3개월 평균보다 ' + Math.round((c.amount / a - 1) * 100) + '% 많아요.');
+    }
+    if (c.budget && c.amount > c.budget) insights.push(c.name + ' 예산을 ' + (c.amount - c.budget).toLocaleString('ko-KR') + '원 초과했어요.');
+  });
+
+  return {
+    month: month,
+    income: income,
+    expense: expense,
+    net: income - expense,
+    count: cur.length,
+    savingsRate: income ? Math.round(((income - expense) / income) * 1000) / 10 : null,
+    prev: { income: sum(prev, 'income'), expense: sum(prev, 'expense') },
+    byCategory: byCategory,
+    bySubcategory: bySubcategory,
+    byMember: byMember,
+    daily: daily,
+    trend: trend,
+    topMerchants: topMerchants,
+    insights: insights,
+  };
+}

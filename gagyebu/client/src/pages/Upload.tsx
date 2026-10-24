@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, won, type DraftItem, type TxType } from '../api'
+import { extractWithClaude, type AnalysisContext } from '../claude'
 import type { Ctx } from '../App'
 import { CategorySelect, MemberSelect } from '../components/TxForm'
 
-type Result = { id: number; document_type: string; summary: string; items: DraftItem[] }
-type History = { id: number; filenames: string; doc_type: string; summary: string; status: string; created_at: string; created_by_name: string; tx_count: number }
+type Result = { filenames: string[]; document_type: string; summary: string; items: DraftItem[] }
+type History = { id: number; filenames: string; doc_type: string; summary: string; created_at: string; created_by_name: string; tx_count: number }
 
 export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void }) {
   const [files, setFiles] = useState<File[]>([])
   const [memberId, setMemberId] = useState<number | null>(ctx.me.user.id)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<string | false>(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<Result | null>(null)
   const [history, setHistory] = useState<History[]>([])
@@ -21,13 +22,14 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
   }, [result])
 
   async function analyze() {
-    setBusy(true)
+    setBusy('🤖 AI가 문서를 읽고 있어요… (보통 30초~2분)')
     setError('')
     try {
-      const form = new FormData()
-      files.forEach((f) => form.append('files', f))
-      if (memberId) form.append('member_id', String(memberId))
-      setResult(await api<Result>('/uploads', { form }))
+      const context = await api<AnalysisContext>('/analysis-context')
+      const extraction = await extractWithClaude(files, context)
+      setBusy('분류 결과를 정리하고 있어요…')
+      const prepared = await api<Omit<Result, 'filenames'>>('/uploads/prepare', { body: { extraction, member_id: memberId } })
+      setResult({ ...prepared, filenames: files.map((f) => f.name) })
       setFiles([])
     } catch (e) {
       setError((e as Error).message)
@@ -38,10 +40,10 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
 
   async function commit() {
     if (!result) return
-    setBusy(true)
+    setBusy('저장 중…')
     setError('')
     try {
-      await api(`/uploads/${result.id}/commit`, { body: { items: result.items } })
+      await api('/uploads/commit', { body: { items: result.items, filenames: result.filenames, document_type: result.document_type, summary: result.summary } })
       setResult(null)
       onSaved()
     } catch (e) {
@@ -108,8 +110,8 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
           {error && <div className="error">{error}</div>}
           <div className="actions">
             <button onClick={() => setResult(null)}>취소</button>
-            <button className="primary" disabled={busy || included.length === 0} onClick={commit}>
-              {busy ? '저장 중…' : `${included.length}건 저장`}
+            <button className="primary" disabled={!!busy || included.length === 0} onClick={commit}>
+              {busy || `${included.length}건 저장`}
             </button>
           </div>
         </div>
@@ -167,8 +169,8 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
             누구의 거래인가요? <MemberSelect members={ctx.me.members} value={memberId} onChange={setMemberId} />
           </label>
           {error && <div className="error">{error}</div>}
-          <button className="primary wide" disabled={busy} onClick={analyze}>
-            {busy ? '🤖 AI가 분석하고 있어요… (최대 1~2분)' : '🤖 AI로 분석하기'}
+          <button className="primary wide" disabled={!!busy} onClick={analyze}>
+            {busy || '🤖 AI로 분석하기'}
           </button>
         </div>
       )}
@@ -183,10 +185,10 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
                   <td className="small muted">{h.created_at.slice(0, 10)}</td>
                   <td>
                     {h.doc_type}
-                    <div className="small muted">{(JSON.parse(h.filenames) as string[]).join(', ')}</div>
+                    <div className="small muted">{h.filenames}</div>
                   </td>
                   <td className="small">{h.created_by_name}</td>
-                  <td className="small">{h.status === 'committed' ? `${h.tx_count}건 저장` : '저장 안 함'}</td>
+                  <td className="small">{h.tx_count}건 저장</td>
                 </tr>
               ))}
             </tbody>

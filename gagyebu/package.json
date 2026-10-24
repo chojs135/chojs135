@@ -2,10 +2,13 @@
   "name": "gagyebu",
   "private": true,
   "scripts": {
-    "install:all": "npm --prefix server install && npm --prefix client install",
-    "dev:server": "npm --prefix server run dev",
+    "install:all": "npm install && npm --prefix client install",
+    "dev:gas": "node gas-dev/server.mjs",
     "dev:client": "npm --prefix client run dev",
-    "build": "npm --prefix client run build",
-    "start": "npm --prefix server start"
+    "test": "node gas-dev/test.mjs",
+    "deploy": "node tools/deploy.mjs"
+  },
+  "devDependencies": {
+    "@google/clasp": "^3.4.1"
   }
 }

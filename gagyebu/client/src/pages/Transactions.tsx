@@ -76,7 +76,7 @@ export default function Transactions({ ctx }: { ctx: Ctx }) {
         <span>수입 <b className="income">{won(sum('income'))}</b></span>
         <span>지출 <b className="expense">{won(sum('expense'))}</b></span>
         <span className="muted">{rows.length}건</span>
-        <a className="muted small" href="/api/transactions/export.csv">CSV 내려받기</a>
+        <a className="muted small" href={ctx.me.sheetUrl} target="_blank" rel="noreferrer">구글 시트에서 보기</a>
       </div>
 
       {groups.length === 0 && <div className="card muted">이 기간에 내역이 없어요.</div>}

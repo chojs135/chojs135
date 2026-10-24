@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, ApiError, shiftMonth, thisMonth, type Category, type Me } from './api'
-import Login from './pages/Login'
+import { api, shiftMonth, thisMonth, type Category, type Me, type MeResponse } from './api'
+import Setup from './pages/Setup'
 import Dashboard from './pages/Dashboard'
 import Transactions from './pages/Transactions'
 import Upload from './pages/Upload'
@@ -14,18 +14,19 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'settings', label: '설정', icon: '⚙️' },
 ]
 
-export type Ctx = { me: Me; categories: Category[]; reloadCategories: () => void; month: string }
+export type Ctx = { me: Me; reloadMe: () => void; categories: Category[]; reloadCategories: () => void; month: string }
 
 export default function App() {
-  const [me, setMe] = useState<Me | null | undefined>(undefined)
+  const [me, setMe] = useState<MeResponse | undefined>(undefined)
+  const [error, setError] = useState('')
   const [categories, setCategories] = useState<Category[]>([])
   const [tab, setTab] = useState<Tab>('dashboard')
   const [month, setMonth] = useState(thisMonth())
 
   const loadMe = useCallback(() => {
-    api<Me>('/me')
+    api<MeResponse>('/me')
       .then(setMe)
-      .catch((e) => (e instanceof ApiError && e.status === 401 ? setMe(null) : setMe(null)))
+      .catch((e) => setError((e as Error).message))
   }, [])
   const reloadCategories = useCallback(() => {
     api<Category[]>('/categories').then(setCategories)
@@ -33,13 +34,14 @@ export default function App() {
 
   useEffect(loadMe, [loadMe])
   useEffect(() => {
-    if (me) reloadCategories()
+    if (me?.state === 'ok') reloadCategories()
   }, [me, reloadCategories])
 
+  if (error) return <div className="center error">{error}</div>
   if (me === undefined) return <div className="center muted">불러오는 중…</div>
-  if (me === null) return <Login onDone={loadMe} />
+  if (me.state !== 'ok') return <Setup me={me} onDone={loadMe} />
 
-  const ctx: Ctx = { me, categories, reloadCategories, month }
+  const ctx: Ctx = { me, reloadMe: loadMe, categories, reloadCategories, month }
   const [y, m] = month.split('-')
 
   return (
@@ -70,15 +72,7 @@ export default function App() {
         {tab === 'dashboard' && <Dashboard ctx={ctx} goUpload={() => setTab('upload')} />}
         {tab === 'transactions' && <Transactions ctx={ctx} />}
         {tab === 'upload' && <Upload ctx={ctx} onSaved={() => setTab('transactions')} />}
-        {tab === 'settings' && (
-          <Settings
-            ctx={ctx}
-            onLogout={async () => {
-              await api('/auth/logout', { method: 'POST' })
-              setMe(null)
-            }}
-          />
-        )}
+        {tab === 'settings' && <Settings ctx={ctx} />}
       </main>
     </div>
   )

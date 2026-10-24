@@ -187,3 +187,4 @@ form.inline { display: flex; gap: 8px; margin-top: 8px; }
 .review-top select { flex: 1 1 160px; }
 .review-top input[type='date'] { flex: 0 1 150px; }
 .segmented button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.button-link { display: inline-block; padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px; text-decoration: none; color: var(--text); background: var(--surface); }

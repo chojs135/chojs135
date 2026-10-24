@@ -10,13 +10,20 @@ export type Category = {
   sort: number
 }
 
-export type Member = { id: number; name: string }
+export type Member = { id: number; name: string; email: string }
 
-export type Me = {
-  user: { id: number; householdId: number; name: string; email: string }
-  household: { id: number; name: string; invite_code: string }
-  members: Member[]
-}
+export type MeResponse =
+  | { state: 'setup' | 'not_member'; email: string; sheetUrl: string }
+  | {
+      state: 'ok'
+      email: string
+      sheetUrl: string
+      user: Member
+      household: { name: string }
+      members: Member[]
+      hasApiKey: boolean
+    }
+export type Me = Extract<MeResponse, { state: 'ok' }>
 
 export type Tx = {
   id?: number
@@ -69,16 +76,38 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T = unknown>(path: string, opts: { method?: string; body?: unknown; form?: FormData } = {}): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method: opts.method ?? (opts.body || opts.form ? 'POST' : 'GET'),
-    headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
-    body: opts.form ?? (opts.body ? JSON.stringify(opts.body) : undefined),
-    credentials: 'same-origin',
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new ApiError(res.status, data.error ?? '요청에 실패했습니다.')
-  return data as T
+type GoogleScriptRun = {
+  withSuccessHandler(fn: (r: string) => void): GoogleScriptRun
+  withFailureHandler(fn: (e: Error) => void): GoogleScriptRun
+  api(method: string, path: string, body: string): void
+}
+declare global {
+  interface Window {
+    google?: { script: { run: GoogleScriptRun } }
+  }
+}
+
+// 구글 앱스 스크립트 안에서는 google.script.run으로, 로컬 개발(npm run dev)에서는 dev 서버로 보낸다.
+function callBackend(method: string, path: string, body: string): Promise<string> {
+  const run = window.google?.script?.run
+  if (run) {
+    return new Promise((resolve, reject) => run.withSuccessHandler(resolve).withFailureHandler(reject).api(method, path, body))
+  }
+  const user = new URLSearchParams(location.search).get('as') ?? undefined
+  return fetch('/__gas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method, path, body, user }) }).then((r) => r.text())
+}
+
+export async function api<T = unknown>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
+  const method = opts.method ?? (opts.body !== undefined ? 'POST' : 'GET')
+  let raw: string
+  try {
+    raw = await callBackend(method, path, opts.body !== undefined ? JSON.stringify(opts.body) : '')
+  } catch (e) {
+    throw new ApiError(0, `서버에 연결하지 못했어요: ${(e as Error).message}`)
+  }
+  const res = JSON.parse(raw) as { ok: true; data: T } | { ok: false; status: number; error: string }
+  if (!res.ok) throw new ApiError(res.status, res.error)
+  return res.data
 }
 
 export const won = (n: number) => `${Math.round(n).toLocaleString('ko-KR')}원`
