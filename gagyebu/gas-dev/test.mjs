@@ -40,16 +40,17 @@ const wifeId = wifeMe.user.id
 // 3. 카테고리
 const cats = ok(gas.call(H, 'GET', '/categories'))
 const cat = (name) => cats.find((c) => c.name === name)
-assert.equal(cats.length, 24)
-assert.deepEqual([...new Set(cats.map((c) => c.type))], ['expense', 'income', 'saving', 'transfer'])
-assert.deepEqual(cat('식비').subcategories, ['장보기', '외식', '배달', '카페/간식', '편의점'])
+assert.equal(cats.length, 16)
+assert.deepEqual([...new Set(cats.map((c) => c.type))], ['income', 'saving', 'expense', 'transfer'])
+assert.deepEqual(cats.filter((c) => c.type === 'expense').map((c) => c.name).slice(0, 3), ['고정지출', '식비', '용돈'], '엑셀 가계부 순서')
+assert.deepEqual(cat('식비').subcategories, ['식재료', '편의점/까페', '외식', '배달'])
 
 // 4. 거래 입력 / 조회 / 수정 / 삭제
 const t1 = ok(gas.call(H, 'POST', '/transactions', { date: '2026-10-03', type: 'expense', amount: 45000, category_id: cat('식비').id, subcategory: '외식', merchant: '김밥천국 강남점', member_id: husbandId }))
 ok(gas.call(W, 'POST', '/transactions', { date: '2026-10-05', type: 'expense', amount: 30000, category_id: cat('식비').id, subcategory: '배달', merchant: '배달의민족', member_id: wifeId }))
-ok(gas.call(H, 'POST', '/transactions', { date: '2026-10-25', type: 'income', amount: 3500000, category_id: cat('급여').id, subcategory: '월급', merchant: '회사', member_id: husbandId }))
-ok(gas.call(H, 'POST', '/transactions', { date: '2026-10-20', type: 'expense', amount: 320000, category_id: cat('주거/관리비').id, subcategory: '관리비', merchant: '래미안 관리비', member_id: null, fixed: true, tags: ['#확인필요', '확인필요', ' 관리비 '] }))
-ok(gas.call(H, 'POST', '/transactions', { date: '2026-09-20', type: 'expense', amount: 300000, category_id: cat('주거/관리비').id, subcategory: '관리비', merchant: '래미안 관리비', member_id: null }))
+ok(gas.call(H, 'POST', '/transactions', { date: '2026-10-25', type: 'income', amount: 3500000, category_id: cat('수입').id, subcategory: '월급', merchant: '회사', member_id: husbandId }))
+ok(gas.call(H, 'POST', '/transactions', { date: '2026-10-20', type: 'expense', amount: 320000, category_id: cat('고정지출').id, subcategory: '관리비', merchant: '래미안 관리비', member_id: null, fixed: true, tags: ['#확인필요', '확인필요', ' 관리비 '] }))
+ok(gas.call(H, 'POST', '/transactions', { date: '2026-09-20', type: 'expense', amount: 300000, category_id: cat('고정지출').id, subcategory: '관리비', merchant: '래미안 관리비', member_id: null }))
 ok(gas.call(H, 'POST', '/transactions', { date: '2026-10-15', type: 'saving', amount: 1000000, category_id: cat('저축').id, subcategory: '적금', merchant: '청년적금', fixed: true }))
 ok(gas.call(H, 'POST', '/transactions', { date: '2026-10-16', type: 'transfer', amount: 800000, category_id: cat('이체').id, subcategory: '카드대금', merchant: '신한카드 대금' }))
 fail(gas.call(H, 'POST', '/transactions', { date: '2026/10/01', type: 'expense', amount: 1 }), 400)
@@ -79,10 +80,10 @@ assert.equal(rules.find((r) => r.keyword === '김밥천국').subcategory, '배�
 assert.equal(ok(gas.call(H, 'GET', '/transactions?q=' + encodeURIComponent('김밥')))[0].memo, '야식')
 
 // 5. 예산 / 통계
-ok(gas.call(H, 'PUT', '/budgets', { items: [{ category_id: cat('식비').id, amount: 50000 }, { category_id: cat('주거/관리비').id, amount: 400000 }] }))
+ok(gas.call(H, 'PUT', '/budgets', { items: [{ category_id: cat('식비').id, amount: 50000 }, { category_id: cat('고정지출').id, amount: 400000 }] }))
 let budgets = ok(gas.call(H, 'GET', '/budgets'))
 assert.equal(budgets.length, 2)
-ok(gas.call(H, 'PUT', '/budgets', { items: [{ category_id: cat('주거/관리비').id, amount: 0 }] }))
+ok(gas.call(H, 'PUT', '/budgets', { items: [{ category_id: cat('고정지출').id, amount: 0 }] }))
 budgets = ok(gas.call(H, 'GET', '/budgets'))
 assert.deepEqual(budgets, [{ category_id: cat('식비').id, amount: 50000 }])
 
@@ -103,7 +104,7 @@ assert.equal(s.calendar[0].noSpend, true)
 assert.equal(s.calendar[30].future, true, '오늘(2026-10-24) 이후는 무지출로 세지 않음')
 assert.equal(s.noSpendDays, 24 - 3)
 assert.equal(s.prev.expense, 300000)
-assert.equal(s.byCategory[0].name, '주거/관리비')
+assert.equal(s.byCategory[0].name, '고정지출')
 assert.equal(s.byCategory.find((c) => c.name === '식비').budget, 50000)
 assert.ok(s.insights.some((i) => i.text.includes('식비 예산')))
 assert.ok(s.insights.some((i) => i.level === 'good' && i.text.includes('무지출')))
@@ -119,11 +120,55 @@ assert.equal(s.byCategory[0].budget, null, '사람별 보기에서는 예산 숨
 s = ok(gas.call(H, 'GET', '/stats?month=2026-10&member_id=shared'))
 assert.equal(s.expense, 320000)
 
-// 월별요약 탭
-const monthly = gas.sheets.find((x) => x.name === '월별요약').data
-assert.deepEqual(monthly[0], ['월', '수입', '지출', '저축', '남은 돈', '저축률(%)'])
-assert.deepEqual(monthly[1], ['2026-10', 3500000, 395000, 1000000, 2105000, 28.6])
-assert.equal(monthly[2][0], '2026-09')
+// 구글 시트 보고서 탭 (엑셀 가계부 구성)
+const names = gas.sheets.map((x) => x.name)
+assert.deepEqual(names.slice(0, 13), ['통합시트', '1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'], '보고서 탭이 앞에')
+assert.ok(names.indexOf('거래내역') > 12, '데이터 탭은 뒤에')
+assert.ok(!names.includes('월별요약'))
+const annual = gas.sheets.find((x) => x.name === '통합시트')
+assert.equal(annual.getCharts().length, 1, '월별 차트')
+// 총 수입·총 저축·총 지출·저축률·남은 돈
+const [kr, kc] = annual.find('총 수입')
+assert.deepEqual([0, 1, 2, 3, 4].map((i) => annual.cell(kr + 1, kc + i)), [3500000, 1000000, 695000, '28.6%', 3500000 - 1000000 - 695000])
+// 수입 월별 상세표: 사람별로 나뉜 월급
+const [ir] = annual.find('수입 월별 상세표')
+assert.deepEqual(annual.data[ir].slice(1, 6), ['대분류', '소분류', '합계', '1월', '2월'])
+const wageRow = annual.data.slice(ir).find((r) => r[2] === '월급(민호)')
+assert.equal(wageRow[3], 3500000)
+assert.equal(wageRow[3 + 10], 3500000, '10월 칸')
+// 지출 월별 상세표: 고정지출 > 관리비, 대분류 합계, 총 지출
+const [er] = annual.find('지출 월별 상세표')
+const exp = annual.data.slice(er)
+const rent = exp.find((r) => r[1] === '고정지출' && r[2] === '주거비')
+assert.ok(rent, '설정된 소분류는 금액이 없어도 줄이 있음')
+const mgmt = exp.find((r) => r[2] === '관리비')
+assert.equal(mgmt[3], 620000)
+assert.equal(mgmt[3 + 9], 300000)
+assert.equal(mgmt[16], 310000, '평균(기록 있는 2개월)')
+assert.equal(exp.find((r) => r[1] === '고정지출 합계')[3], 620000)
+assert.equal(exp.find((r) => r[1] === '총 지출')[3], 695000)
+
+// 10월 탭: 이달의 정리, 고정지출 내역, 전체 내역, 무지출 달력
+const oct = gas.sheets.find((x) => x.name === '10월')
+assert.equal(oct.cell(...oct.find('2026년 10월 가계부')), '2026년 10월 가계부')
+const [sr, sc] = oct.find('총 지출')
+assert.equal(oct.cell(sr, sc + 1), 395000)
+assert.equal(oct.cell(sr + 1, sc + 1), 320000, '고정지출')
+assert.equal(oct.cell(sr + 2, sc + 1), 75000, '비고정지출')
+const [fr, fc] = oct.find('이달의 고정지출 내역')
+assert.deepEqual(oct.data[fr].slice(fc - 1, fc + 3), ['No', '날짜', '내용', '금액'])
+assert.equal(oct.cell(fr + 2, fc + 2), '래미안 관리비')
+const [ar, ac] = oct.find('이달의 수입 · 저축 · 지출 내역')
+assert.equal(oct.cell(ar + 2, ac + 1), '10.03(토)')
+assert.equal(oct.cell(ar + 2, ac + 3), '김밥천국 강남점')
+assert.ok(oct.find('이달의 무지출 Day 🌱 21일'))
+// 주간별: 10/3(토)은 1주, 10/5(월)은 2주
+const weekly = oct.data.slice(oct.find('대분류별 지출 (주간별)')[0])
+const foodWeek = weekly.find((r) => r[1] === '식비 합계')
+assert.deepEqual(foodWeek.slice(3, 6), [75000, 45000, 30000])
+// 사람별 이름은 소분류에만: 수입은 월급(민호)
+const sep = gas.sheets.find((x) => x.name === '9월')
+assert.equal(sep.cell(...sep.find('총 지출')), '총 지출')
 
 // 6. 업로드: 분석 컨텍스트 → 결과 정리 → 저장
 // 연간 리포트
@@ -131,19 +176,19 @@ const yr = ok(gas.call(H, 'GET', '/annual?year=2026'))
 assert.equal(yr.activeMonths, 2)
 assert.equal(yr.expense, 695000)
 assert.equal(yr.totals[9].saving, 1000000)
-const feeRow = yr.expenseTable.find((r) => r.name === '주거/관리비')
+const feeRow = yr.expenseTable.find((r) => r.name === '고정지출')
 assert.equal(feeRow.months[8], 300000)
 assert.equal(feeRow.months[9], 320000)
 assert.equal(feeRow.total, 620000)
 assert.equal(feeRow.average, 310000)
-assert.equal(yr.expenseTable[0].name, '식비', '카테고리 순서대로')
+assert.equal(yr.expenseTable[0].name, '고정지출', '카테고리 순서대로')
 assert.deepEqual(yr.savingTable.map((r) => r.name), ['저축'])
 
 const actx = ok(gas.call(W, 'GET', '/analysis-context'))
 assert.equal(actx.apiKey, 'sk-ant-test')
 assert.equal(actx.model, 'claude-haiku-5-5', '기본은 저렴한 Haiku')
 assert.ok(actx.system.includes('"김밥천국" → 식비 / 배달'), '가맹점 규칙이 프롬프트에 들어가야 함')
-assert.ok(actx.schema.properties.transactions.items.properties.category.enum.includes('주거/관리비'))
+assert.ok(actx.schema.properties.transactions.items.properties.category.enum.includes('고정지출'))
 assert.deepEqual(actx.schema.properties.transactions.items.properties.type.enum, ['expense', 'income', 'saving', 'transfer'])
 assert.ok(actx.system.includes('저축 카테고리:\n- 저축: 적금'))
 
@@ -153,7 +198,7 @@ const extraction = {
   transactions: [
     { date: '2026-10-07', type: 'expense', amount: 12000, merchant: '김밥천국 역삼점', description: '분식', category: '식비', subcategory: '외식', payment_method: '신한카드', confidence: 0.9, note: '' },
     { date: '2026-10-05', type: 'expense', amount: -30000, merchant: '배달의민족', description: '배달', category: '식비', subcategory: '배달', payment_method: '신한카드', confidence: 0.95, note: '' },
-    { date: '2026-10-08', type: 'expense', amount: 18000, merchant: '넷플릭스', description: '구독', category: '문화/여가', subcategory: '없는세부', payment_method: '', fixed: true, confidence: 0.5, note: '흐림' },
+    { date: '2026-10-08', type: 'expense', amount: 18000, merchant: '넷플릭스', description: '구독', category: '문화생활', subcategory: '없는세부', payment_method: '', fixed: true, confidence: 0.5, note: '흐림' },
   ],
 }
 const prepared = ok(gas.call(W, 'POST', '/uploads/prepare', { extraction, member_id: wifeId }))
@@ -169,12 +214,12 @@ assert.equal(c.member_id, wifeId)
 assert.equal(c.fixed, true)
 assert.equal(a.fixed, false)
 
-c.category_id = cat('문화/여가').id
-c.subcategory = '구독서비스' // 사용자가 고침 → 규칙 학습
+c.category_id = cat('문화생활').id
+c.subcategory = 'OTT' // 사용자가 고침 → 규칙 학습
 const committed = ok(gas.call(W, 'POST', '/uploads/commit', { items: prepared.items, filenames: ['카드.pdf'], document_type: prepared.document_type, summary: prepared.summary }))
 assert.equal(committed.saved, 2)
 rules = ok(gas.call(H, 'GET', '/rules'))
-assert.ok(rules.some((r) => r.keyword === '넷플릭스' && r.subcategory === '구독서비스'))
+assert.ok(rules.some((r) => r.keyword === '넷플릭스' && r.subcategory === 'OTT'))
 const uploads = ok(gas.call(H, 'GET', '/uploads'))
 assert.equal(uploads[0].tx_count, 2)
 assert.equal(uploads[0].created_by_name, '지수')
@@ -191,7 +236,7 @@ assert.ok(ok(gas.call(H, 'GET', '/rules')).some((r) => r.keyword === '김밥천�
 assert.equal(ok(gas.call(H, 'GET', '/budgets'))[0].category_id, cat('식비').id)
 const newCat = ok(gas.call(H, 'POST', '/categories', { type: 'expense', name: '술값' }))
 fail(gas.call(H, 'POST', '/categories', { type: 'expense', name: '술값' }), 409)
-ok(gas.call(H, 'DELETE', `/categories/${cat('문화/여가').id}`))
+ok(gas.call(H, 'DELETE', `/categories/${cat('문화생활').id}`))
 const netflix = ok(gas.call(H, 'GET', '/transactions?q=' + encodeURIComponent('넷플릭스')))[0]
 assert.equal(netflix.category_id, null)
 assert.ok(!ok(gas.call(H, 'GET', '/rules')).some((r) => r.keyword === '넷플릭스'))
@@ -232,7 +277,7 @@ gas.authState.missing = false
   ok(g.call(U, 'POST', '/setup', { name: '나', apiKey: 'sk-ant-test' }))
   const cs = ok(g.call(U, 'GET', '/categories'))
   const food = cs.find((c) => c.name === '식비').id
-  const house = cs.find((c) => c.name === '주거/관리비').id
+  const house = cs.find((c) => c.name === '고정지출').id
   const tx = (o) => ({ type: 'expense', category: '식비', subcategory: '', description: '', payment_method: '', fixed: false, confidence: 0.9, note: '', source_file: '', ...o })
   const prep = (transactions) => ok(g.call(U, 'POST', '/uploads/prepare', { extraction: { document_type: 'x', summary: '', transactions } })).items
   const commit = (items) => ok(g.call(U, 'POST', '/uploads/commit', { items, filenames: ['f'] }))
@@ -241,16 +286,16 @@ gas.authState.missing = false
   commit(prep([tx({ date: '2026-08-15', amount: 52300, merchant: '이마트 해운대점' })]))
   // 관리비 고지서를 항목별로 저장
   commit(prep([
-    tx({ date: '2026-08-25', amount: 170000, merchant: '래미안 일반관리비', category: '주거/관리비' }),
-    tx({ date: '2026-08-25', amount: 72000, merchant: '래미안 전기료', category: '주거/관리비' }),
-    tx({ date: '2026-08-25', amount: 38000, merchant: '래미안 수도료', category: '주거/관리비' }),
+    tx({ date: '2026-08-25', amount: 170000, merchant: '래미안 일반관리비', category: '고정지출' }),
+    tx({ date: '2026-08-25', amount: 72000, merchant: '래미안 전기료', category: '고정지출' }),
+    tx({ date: '2026-08-25', amount: 38000, merchant: '래미안 수도료', category: '고정지출' }),
   ]))
   ok(g.call(U, 'POST', '/transactions', { date: '2026-08-16', type: 'expense', amount: 4500, category_id: food, merchant: '스타벅스' }))
 
   // 카드 내역 PDF: 날짜 하루 차이 + 다른 표기, 관리비 합계 한 줄, 같은 금액 다른 가맹점, 진짜 새 결제
   const card = prep([
     tx({ date: '2026-08-16', amount: 52300, merchant: '이마트(주)해운대', payment_method: '삼성카드' }),
-    tx({ date: '2026-08-27', amount: 280000, merchant: '래미안아파트관리비', category: '주거/관리비', payment_method: '삼성카드' }),
+    tx({ date: '2026-08-27', amount: 280000, merchant: '래미안아파트관리비', category: '고정지출', payment_method: '삼성카드' }),
     tx({ date: '2026-08-18', amount: 4500, merchant: '메가커피', payment_method: '삼성카드' }),
     tx({ date: '2026-08-20', amount: 15000, merchant: '김밥천국', payment_method: '삼성카드' }),
   ])
@@ -284,8 +329,8 @@ gas.authState.missing = false
   // 반대 순서: 카드 내역(합계 한 줄)을 먼저, 고지서(항목별)를 나중에
   ok(g.call(U, 'POST', '/transactions', { date: '2026-09-26', type: 'expense', amount: 300000, category_id: house, merchant: '아파트관리비 카드결제' }))
   const bill = prep([
-    tx({ date: '2026-09-25', amount: 200000, merchant: '일반관리비', category: '주거/관리비' }),
-    tx({ date: '2026-09-25', amount: 100000, merchant: '난방비', category: '주거/관리비' }),
+    tx({ date: '2026-09-25', amount: 200000, merchant: '일반관리비', category: '고정지출' }),
+    tx({ date: '2026-09-25', amount: 100000, merchant: '난방비', category: '고정지출' }),
   ])
   assert.ok(bill.every((i) => i.duplicate?.level === 'weak' && i.include), '합계가 같으면 알려 주되 선택은 사람에게')
 
@@ -301,6 +346,61 @@ gas.authState.missing = false
   assert.equal(batch[2].duplicate, null)
 
   assert.ok(ok(g.call(U, 'GET', '/analysis-context')).system.includes('한 번만 기록'))
+}
+
+// 11. 이전 기본 분류를 쓰던 가계부 → 엑셀 기준 분류로 자동 이전
+{
+  const g = createGas()
+  const U = 'old@gmail.com'
+  ok(g.call(U, 'POST', '/setup', { name: '민호' }))
+  const sheet = (n) => g.sheets.find((x) => x.name === n)
+  // 이전 버전 상태를 만든다
+  delete g.props.CATEGORY_PRESET
+  const catHeader = sheet('카테고리').data[0]
+  sheet('카테고리').data = [
+    catHeader,
+    [1, '지출', '식비', '🍚', '#f97316', '장보기, 외식, 배달, 카페/간식, 편의점', 1],
+    [2, '지출', '주거/관리비', '🏠', '#0ea5e9', '관리비, 전기, 수도', 2],
+    [3, '지출', '통신/구독', '📱', '#8b5cf6', '휴대폰, 구독서비스', 3],
+    [4, '수입', '급여', '💼', '#16a34a', '월급, 상여금', 4],
+    [5, '저축', '투자', '📈', '#7c3aed', '주식/ETF', 5],
+    [6, '지출', '골프', '⛳', '#000000', '라운딩', 6],
+  ]
+  const txHeader = sheet('거래내역').data[0]
+  const row = (o) => txHeader.map((h) => o[h] ?? '')
+  sheet('거래내역').data = [
+    txHeader,
+    row({ ID: 1, 날짜: '2026-10-02', 구분: '지출', 금액: 50000, 카테고리: '식비', 세부항목: '장보기', 가맹점: '이마트', 사용자: '민호' }),
+    row({ ID: 2, 날짜: '2026-10-09', 구분: '지출', 금액: 89000, 카테고리: '통신/구독', 세부항목: '휴대폰', 가맹점: 'SKT', 사용자: '공동' }),
+    row({ ID: 3, 날짜: '2026-10-20', 구분: '지출', 금액: 72000, 카테고리: '주거/관리비', 세부항목: '전기', 가맹점: '전기료', 사용자: '공동' }),
+    row({ ID: 4, 날짜: '2026-10-25', 구분: '수입', 금액: 3000000, 카테고리: '급여', 세부항목: '월급', 가맹점: '회사', 사용자: '민호' }),
+    row({ ID: 5, 날짜: '2026-10-26', 구분: '저축', 금액: 300000, 카테고리: '투자', 세부항목: '주식/ETF', 가맹점: '키움', 사용자: '민호' }),
+    row({ ID: 6, 날짜: '2026-10-27', 구분: '지출', 금액: 150000, 카테고리: '골프', 세부항목: '라운딩', 가맹점: '골프장', 사용자: '민호' }),
+  ]
+  sheet('예산').data = [sheet('예산').data[0], ['주거/관리비', 300000], ['통신/구독', 100000], ['식비', 500000]]
+  sheet('자동분류규칙').data = [sheet('자동분류규칙').data[0], ['SKT', '지출', '통신/구독', '휴대폰', '']]
+  g.sheets.push(Object.assign(sheet('예산').constructor ? new (sheet('예산').constructor)('월별요약') : {}, {}))
+
+  const list = ok(g.call(U, 'GET', '/transactions'))
+  const by = (m) => list.find((t) => t.merchant === m)
+  const cats = ok(g.call(U, 'GET', '/categories'))
+  const nameOf = (id) => cats.find((c) => c.id === id)?.name
+  assert.equal(g.props.CATEGORY_PRESET, 'excel-v1')
+  assert.deepEqual([nameOf(by('이마트').category_id), by('이마트').subcategory], ['식비', '식재료'])
+  assert.deepEqual([nameOf(by('SKT').category_id), by('SKT').subcategory, by('SKT').fixed], ['고정지출', '통신비', true])
+  assert.deepEqual([nameOf(by('전기료').category_id), by('전기료').subcategory], ['고정지출', '공과금'])
+  assert.deepEqual([nameOf(by('회사').category_id), by('회사').subcategory], ['수입', '월급'])
+  assert.deepEqual([nameOf(by('키움').category_id), by('키움').subcategory], ['저축', '주식'])
+  assert.equal(nameOf(by('골프장').category_id), '골프', '직접 만든 카테고리는 그대로')
+  assert.ok(!cats.some((c) => c.name === '주거/관리비' || c.name === '통신/구독'))
+  const budgets = ok(g.call(U, 'GET', '/budgets'))
+  assert.equal(budgets.find((b) => nameOf(b.category_id) === '고정지출').amount, 400000, '합쳐진 예산')
+  assert.equal(ok(g.call(U, 'GET', '/rules'))[0].category, '고정지출')
+  assert.ok(!g.sheets.some((x) => x.name === '월별요약'))
+  assert.ok(sheet('10월').find('이달의 고정지출 내역'))
+  // 두 번째 호출에서는 다시 옮기지 않는다
+  ok(g.call(U, 'GET', '/transactions'))
+  assert.equal(ok(g.call(U, 'GET', '/categories')).length, cats.length)
 }
 
 console.log('✅ gas/Code.js 테스트 모두 통과')

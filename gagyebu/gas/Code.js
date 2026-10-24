@@ -17,7 +17,6 @@ var SHEETS = {
   rule: { name: '자동분류규칙', headers: ['키워드', '구분', '카테고리', '세부항목', '수정일시'] },
   member: { name: '구성원', headers: ['ID', '이메일', '이름', '추가일시'] },
   upload: { name: '업로드기록', headers: ['ID', '일시', '파일', '문서종류', '요약', '올린사람', '저장건수'] },
-  monthly: { name: '월별요약', headers: ['월', '수입', '지출', '저축', '남은 돈', '저축률(%)'] },
 };
 // 저축은 쓴 돈도 버는 돈도 아니지만 "얼마나 모았나"를 보려고 따로 센다.
 // 이체(카드대금, 내 계좌 간 이동)는 통계에서 완전히 빠진다.
@@ -29,33 +28,61 @@ var SHARED = '공동';
 var MODELS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'];
 var DEFAULT_MODEL = 'claude-haiku-5-5';
 
+// 참고용 엑셀 가계부의 분류(설정 탭)를 기준으로 한 기본 분류.
+// 엑셀은 "월급(솔)"처럼 사람마다 소분류를 따로 두었지만, 여기선 거래마다 사용자가 있어서 보고서에서 자동으로 나눈다.
+var CATEGORY_PRESET = 'excel-v1';
+var FIXED_CATEGORY = '고정지출';
 var DEFAULT_CATEGORIES = [
-  ['expense', '식비', '🍚', '#f97316', ['장보기', '외식', '배달', '카페/간식', '편의점']],
-  ['expense', '주거/관리비', '🏠', '#0ea5e9', ['관리비', '전기', '수도', '가스/난방', '월세', '대출이자', '인터넷/TV', '수선/유지']],
-  ['expense', '생활용품', '🧺', '#14b8a6', ['생필품', '가구/가전', '주방용품']],
-  ['expense', '교통/차량', '🚗', '#6366f1', ['대중교통', '택시', '주유/충전', '주차/통행료', '정비/세차', '자동차보험']],
-  ['expense', '통신/구독', '📱', '#8b5cf6', ['휴대폰', '구독서비스', '멤버십']],
-  ['expense', '의료/건강', '💊', '#ef4444', ['병원/약국', '영양제', '운동']],
-  ['expense', '의류/미용', '👕', '#ec4899', ['의류', '신발/잡화', '미용실', '화장품']],
-  ['expense', '교육/자기계발', '📚', '#eab308', ['학원/강의', '도서', '자격증', '육아/학교']],
-  ['expense', '문화/여가', '🎬', '#22c55e', ['여행/숙박', '취미', '영화/공연', '게임']],
-  ['expense', '경조사/선물', '🎁', '#f43f5e', ['경조사비', '선물', '부모님', '모임회비']],
-  ['expense', '용돈', '👛', '#d946ef', ['개인 용돈']],
-  ['expense', '보험/세금', '🧾', '#64748b', ['보험료', '세금/공과금', '수수료']],
-  ['expense', '기부', '🤝', '#10b981', ['정기후원', '비정기']],
-  ['expense', '반려동물', '🐾', '#a16207', ['사료/간식', '병원', '용품']],
+  ['income', '수입', '💼', '#16a34a', ['월급', '상여금', '부수입', '이자/배당', '환급', '기타']],
+  ['saving', '저축', '🐷', '#0284c7', ['적금', '예금', '주택청약', '대출상환', '공제회', '주식', '파킹통장', '연금/IRP']],
+  ['expense', '고정지출', '🏠', '#0ea5e9', ['주거비', '관리비', '공과금', '보험료', '통신비', '구독료']],
+  ['expense', '식비', '🍚', '#f97316', ['식재료', '편의점/까페', '외식', '배달']],
+  ['expense', '용돈', '👛', '#d946ef', ['용돈']],
+  ['expense', '생활용품', '🧺', '#14b8a6', ['생필품', '가전/가구', '수리비']],
+  ['expense', '의복/미용', '👕', '#ec4899', ['의류', '미용', '헤어']],
+  ['expense', '건강', '💊', '#ef4444', ['병원/약국', '영양제', '운동비']],
+  ['expense', '자기계발', '📚', '#eab308', ['강의', '책', '자격증', '학교연수', '구독', '기타']],
+  ['expense', '경조사', '🎁', '#f43f5e', ['가족', '지인', '부모님', '회비', '기타']],
+  ['expense', '문화생활', '🎬', '#22c55e', ['여행', 'OTT', '공연/책/기타']],
+  ['expense', '세금', '🧾', '#64748b', ['부동산', '주식', '자동차', '기타']],
+  ['expense', '교통', '🚗', '#6366f1', ['주유', '관리', '자동차보험', '교통비', '톨비/주차']],
+  ['expense', '기부', '🤝', '#10b981', ['정기', '비정기']],
   ['expense', '기타지출', '📦', '#9ca3af', []],
-  ['income', '급여', '💼', '#16a34a', ['월급', '상여금']],
-  ['income', '부수입', '💡', '#0d9488', ['사업/프리랜스', '중고거래', '포인트/캐시백']],
-  ['income', '금융수입', '🏦', '#2563eb', ['이자', '배당', '투자수익']],
-  ['income', '환급/지원금', '↩️', '#7c3aed', ['세금환급', '정부지원금', '환불']],
-  ['income', '기타수입', '➕', '#9ca3af', ['용돈', '기타']],
-  ['saving', '저축', '🐷', '#0284c7', ['적금', '예금', '주택청약', '비상금/파킹통장']],
-  ['saving', '투자', '📈', '#7c3aed', ['주식/ETF', '연금/IRP', '공제회', '기타투자']],
-  ['saving', '대출상환', '🏦', '#475569', ['원금 상환']],
   // 통계에서 빠지는 돈의 이동. 카드대금 출금이나 내 계좌 간 이체를 지출로 세면 이중 집계가 된다.
   ['transfer', '이체', '🔁', '#94a3b8', ['카드대금', '내 계좌 이체', '기타']],
 ];
+
+// 이전 기본 분류 → 엑셀 기준 분류. [새 대분류, 새 소분류], '*'는 그 외 소분류.
+var LEGACY_CATEGORY_MAP = {
+  expense: {
+    식비: { 장보기: ['식비', '식재료'], 외식: ['식비', '외식'], 배달: ['식비', '배달'], '카페/간식': ['식비', '편의점/까페'], 편의점: ['식비', '편의점/까페'], '*': ['식비', ''] },
+    '주거/관리비': { 관리비: ['고정지출', '관리비'], 전기: ['고정지출', '공과금'], 수도: ['고정지출', '공과금'], '가스/난방': ['고정지출', '공과금'], 월세: ['고정지출', '주거비'], 대출이자: ['고정지출', '주거비'], '인터넷/TV': ['고정지출', '통신비'], '수선/유지': ['생활용품', '수리비'], '*': ['고정지출', '주거비'] },
+    생활용품: { 생필품: ['생활용품', '생필품'], '가구/가전': ['생활용품', '가전/가구'], 주방용품: ['생활용품', '생필품'], '*': ['생활용품', ''] },
+    '교통/차량': { 대중교통: ['교통', '교통비'], 택시: ['교통', '교통비'], '주유/충전': ['교통', '주유'], '주차/통행료': ['교통', '톨비/주차'], '정비/세차': ['교통', '관리'], 자동차보험: ['교통', '자동차보험'], '*': ['교통', ''] },
+    '통신/구독': { 휴대폰: ['고정지출', '통신비'], 구독서비스: ['고정지출', '구독료'], 멤버십: ['고정지출', '구독료'], '*': ['고정지출', '통신비'] },
+    '의료/건강': { '병원/약국': ['건강', '병원/약국'], 영양제: ['건강', '영양제'], 운동: ['건강', '운동비'], '*': ['건강', ''] },
+    '의류/미용': { 의류: ['의복/미용', '의류'], '신발/잡화': ['의복/미용', '의류'], 미용실: ['의복/미용', '헤어'], 화장품: ['의복/미용', '미용'], '*': ['의복/미용', ''] },
+    '교육/자기계발': { '학원/강의': ['자기계발', '강의'], 도서: ['자기계발', '책'], 자격증: ['자기계발', '자격증'], '*': ['자기계발', '기타'] },
+    '문화/여가': { '여행/숙박': ['문화생활', '여행'], '*': ['문화생활', '공연/책/기타'] },
+    '경조사/선물': { 경조사비: ['경조사', '지인'], 선물: ['경조사', '지인'], 부모님: ['경조사', '부모님'], 모임회비: ['경조사', '회비'], '*': ['경조사', '기타'] },
+    용돈: { '*': ['용돈', '용돈'] },
+    '보험/세금': { 보험료: ['고정지출', '보험료'], '*': ['세금', '기타'] },
+    기부: { 정기후원: ['기부', '정기'], 비정기: ['기부', '비정기'], '*': ['기부', ''] },
+    반려동물: { '*': ['생활용품', '생필품'] },
+  },
+  income: {
+    급여: { 월급: ['수입', '월급'], 상여금: ['수입', '상여금'], '*': ['수입', '월급'] },
+    부수입: { '*': ['수입', '부수입'] },
+    금융수입: { '*': ['수입', '이자/배당'] },
+    '환급/지원금': { '*': ['수입', '환급'] },
+    기타수입: { '*': ['수입', '기타'] },
+  },
+  saving: {
+    저축: { 적금: ['저축', '적금'], 예금: ['저축', '예금'], 주택청약: ['저축', '주택청약'], '비상금/파킹통장': ['저축', '파킹통장'], '*': ['저축', ''] },
+    투자: { '주식/ETF': ['저축', '주식'], '연금/IRP': ['저축', '연금/IRP'], 공제회: ['저축', '공제회'], '*': ['저축', '주식'] },
+    대출상환: { '*': ['저축', '대출상환'] },
+  },
+};
 
 // ---------------------------------------------------------------- 진입점
 
@@ -133,7 +160,6 @@ function sheet_(key) {
       sh.getRange('D:D').setNumberFormat('#,##0');
     }
     if (key === 'budget') sh.getRange('B:B').setNumberFormat('#,##0');
-    if (key === 'monthly') sh.getRange('B:E').setNumberFormat('#,##0');
   }
   return sh;
 }
@@ -273,11 +299,86 @@ function findCategory_(cats, type, name) {
   return cats.filter(function (c) { return c.type === type && c.name === name; })[0] || null;
 }
 
+function presetRows_() {
+  return DEFAULT_CATEGORIES.map(function (c, i) {
+    return { ID: i + 1, 구분: TYPE_KO[c[0]], 이름: c[1], 아이콘: c[2], 색: c[3], 세부항목: c[4].join(', '), 순서: i + 1 };
+  });
+}
+
 function seedCategories_() {
   if (read_('cat').length) return;
-  append_('cat', DEFAULT_CATEGORIES.map(function (c, i) {
-    return { ID: i + 1, 구분: TYPE_KO[c[0]], 이름: c[1], 아이콘: c[2], 색: c[3], 세부항목: c[4].join(', '), 순서: i + 1 };
-  }));
+  append_('cat', presetRows_());
+  props_().setProperty('CATEGORY_PRESET', CATEGORY_PRESET);
+}
+
+/** 시트의 표 영역(머리줄 아래)을 통째로 다시 쓴다. */
+function rewrite_(key, objs) {
+  var sh = sheet_(key);
+  var n = SHEETS[key].headers.length;
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, n).clearContent();
+  append_(key, objs);
+}
+
+/**
+ * 이전 기본 분류를 쓰던 가계부를 엑셀 기준 분류로 옮긴다(한 번만).
+ * 사용자가 직접 만든 카테고리는 그대로 둔다.
+ */
+function ensurePreset_() {
+  var p = props_();
+  if (p.getProperty('CATEGORY_PRESET') === CATEGORY_PRESET) return false;
+  return withLock_(function () {
+    if (p.getProperty('CATEGORY_PRESET') === CATEGORY_PRESET) return false;
+    var mapOf = function (koType, name, sub) {
+      var t = LEGACY_CATEGORY_MAP[KO_TYPE[koType]];
+      var m = t && t[name];
+      if (!m) return null;
+      return m[sub] || m['*'];
+    };
+    var txs = read_('tx').map(function (r) {
+      var to = mapOf(r['구분'], String(r['카테고리']), String(r['세부항목']));
+      if (to) {
+        r['카테고리'] = to[0];
+        r['세부항목'] = to[1];
+        if (to[0] === FIXED_CATEGORY) r['고정'] = FIXED;
+      }
+      return r;
+    });
+    rewrite_('tx', txs);
+    rewrite_('rule', read_('rule').map(function (r) {
+      var to = mapOf(r['구분'], String(r['카테고리']), String(r['세부항목']));
+      if (to) {
+        r['카테고리'] = to[0];
+        r['세부항목'] = to[1];
+      }
+      return r;
+    }));
+    var budgets = {};
+    read_('budget').forEach(function (b) {
+      var to = mapOf('지출', String(b['카테고리']), '*');
+      var name = to ? to[0] : String(b['카테고리']);
+      budgets[name] = (budgets[name] || 0) + (Number(b['월 예산']) || 0);
+    });
+    rewrite_('budget', Object.keys(budgets).map(function (k) { return { 카테고리: k, '월 예산': budgets[k] }; }));
+    // 카테고리: 엑셀 기준 분류 + 사용자가 만든 것
+    var preset = presetRows_();
+    var custom = read_('cat').filter(function (c) {
+      var name = String(c['이름']);
+      var type = KO_TYPE[c['구분']];
+      var legacy = LEGACY_CATEGORY_MAP[type] && LEGACY_CATEGORY_MAP[type][name];
+      var inPreset = preset.some(function (x) { return x['이름'] === name && x['구분'] === c['구분']; });
+      return !legacy && !inPreset;
+    });
+    custom.forEach(function (c, i) {
+      c.ID = preset.length + i + 1;
+      c['순서'] = preset.length + i + 1;
+    });
+    rewrite_('cat', preset.concat(custom));
+    var old = ss_().getSheetByName('월별요약');
+    if (old) ss_().deleteSheet(old);
+    p.setProperty('CATEGORY_PRESET', CATEGORY_PRESET);
+    rebuildReports_();
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------- 거래
@@ -334,7 +435,7 @@ function txToRow_(t, cats, members, extra) {
       내용: t.description || '',
       결제수단: t.payment_method || '',
       사용자: memberNameById_(members, t.member_id),
-      고정: t.fixed ? FIXED : '',
+      고정: t.fixed || (cat && cat.name === FIXED_CATEGORY) ? FIXED : '',
       태그: splitTags_(t.tags).join(', '),
       메모: t.memo || '',
     },
@@ -381,23 +482,6 @@ function rules_() {
   });
 }
 
-/** 월별요약 탭을 다시 계산한다. 거래가 바뀔 때마다 호출. */
-function refreshMonthly_() {
-  var by = {};
-  allTx_().forEach(function (t) {
-    var m = t.date.slice(0, 7);
-    by[m] = by[m] || { income: 0, expense: 0, saving: 0 };
-    if (by[m][t.type] !== undefined) by[m][t.type] += t.amount;
-  });
-  var months = Object.keys(by).sort().reverse();
-  var sh = sheet_('monthly');
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, SHEETS.monthly.headers.length).clearContent();
-  append_('monthly', months.map(function (m) {
-    var v = by[m];
-    return { 월: m, 수입: v.income, 지출: v.expense, 저축: v.saving, '남은 돈': v.income - v.expense - v.saving, '저축률(%)': v.income ? Math.round((v.saving / v.income) * 1000) / 10 : '' };
-  }));
-}
-
 // ---------------------------------------------------------------- 라우터
 
 function parseQuery_(qs) {
@@ -424,6 +508,7 @@ function route_(method, path, body) {
   if (key === 'POST /setup') return setup_(body);
 
   var me = requireMember_();
+  ensurePreset_();
   var id = seg[1];
 
   switch (M + ' /' + seg[0]) {
@@ -479,6 +564,10 @@ function route_(method, path, body) {
       return withLock_(function () { return addMember_(body); });
     case 'PUT /settings':
       return saveSettings_(body);
+    case 'GET /reports':
+      return { year: reportYear_(), years: txYears_() };
+    case 'POST /reports':
+      return withLock_(function () { return rebuildReports_(Number(body.year) || null); });
   }
   throw httpError_(404, '알 수 없는 요청: ' + M + ' ' + p);
 }
@@ -516,7 +605,7 @@ function setup_(body) {
     var email = currentEmail_();
     if (!body.name) throw httpError_(400, '이름을 입력해 주세요.');
     seedCategories_();
-    ['tx', 'budget', 'rule', 'upload', 'monthly'].forEach(sheet_);
+    ['tx', 'budget', 'rule', 'upload'].forEach(sheet_);
     append_('member', [{ ID: 1, 이메일: email, 이름: body.name, 추가일시: now_() }]);
     if (body.householdName) props_().setProperty('HOUSEHOLD_NAME', body.householdName);
     if (body.apiKey) props_().setProperty('ANTHROPIC_API_KEY', cleanKey_(body.apiKey));
@@ -525,6 +614,7 @@ function setup_(body) {
     ss_().getSheets().forEach(function (sh) {
       if (ours.indexOf(sh.getName()) < 0 && sh.getLastRow() <= 1) ss_().deleteSheet(sh);
     });
+    rebuildReports_();
     return true;
   });
 }
@@ -593,6 +683,7 @@ function updateCategory_(id, body) {
     세부항목: (body.subcategories || c.subcategories).join(', '),
     순서: c.sort,
   });
+  rebuildReports_();
   return true;
 }
 
@@ -612,6 +703,7 @@ function deleteCategory_(id) {
   deleteRows_('rule', read_('rule').filter(function (r) { return String(r['카테고리']) === c.name && KO_TYPE[r['구분']] === c.type; }).map(function (r) { return r._row; }));
   if (c.type === 'expense') deleteRows_('budget', read_('budget').filter(function (r) { return String(r['카테고리']) === c.name; }).map(function (r) { return r._row; }));
   deleteRows_('cat', [c._row]);
+  rebuildReports_();
   return true;
 }
 
@@ -674,7 +766,7 @@ function createTx_(t, me) {
   var row = txToRow_(t, cats, members, { ID: id, 입력방식: '수기', 입력자: me.name, 입력일시: now_(), 수정일시: now_() });
   append_('tx', [row]);
   if (t.merchant && row['카테고리']) learnRule_(t.merchant, t.type, row['카테고리'], row['세부항목']);
-  refreshMonthly_();
+  refreshReports_([t.date.slice(0, 7)]);
   return { id: id };
 }
 
@@ -695,14 +787,22 @@ function updateTx_(id, t) {
   if (t.merchant && row['카테고리'] && (String(before['카테고리']) !== row['카테고리'] || String(before['세부항목']) !== row['세부항목'])) {
     learnRule_(t.merchant, t.type, row['카테고리'], row['세부항목']);
   }
-  refreshMonthly_();
+  refreshReports_([ymd_(before['날짜']).slice(0, 7), t.date.slice(0, 7)]);
   return true;
 }
 
 function deleteTx_(id) {
-  deleteRows_('tx', read_('tx').filter(function (r) { return Number(r.ID) === id; }).map(function (r) { return r._row; }));
-  refreshMonthly_();
+  var rows = read_('tx').filter(function (r) { return Number(r.ID) === id; });
+  deleteRows_('tx', rows.map(function (r) { return r._row; }));
+  refreshReports_(rows.map(function (r) { return ymd_(r['날짜']).slice(0, 7); }));
   return true;
+}
+
+function txYears_() {
+  var years = {};
+  allTx_().forEach(function (t) { years[t.date.slice(0, 4)] = true; });
+  years[Utilities.formatDate(new Date(), tz_(), 'yyyy')] = true;
+  return Object.keys(years).map(Number).sort();
 }
 
 // ---------------------------------------------------------------- AI 업로드
@@ -788,7 +888,9 @@ function systemPrompt_(cats, rules) {
     ruleText,
     '## 문서 유형별 처리',
     '- 은행/카드 거래내역: 한 줄이 한 거래입니다. 출금은 expense 또는 transfer, 입금은 income 또는 transfer입니다. 승인 취소(취소/환불) 건은 원거래와 상쇄되도록 income/환급/지원금/환불로 기록하세요. 잔액, 합계, 소계 줄은 거래가 아니므로 제외합니다.',
-    '- 아파트 관리비 고지서: 항목별(일반관리비, 전기료, 수도료, 난방비, 급탕비, 경비비, 청소비 등)로 나눠 각각 주거/관리비 아래의 알맞은 세부항목으로 기록하세요. 전기·수도·가스/난방이 아닌 공용 항목은 "관리비"로 묶어 하나로 합쳐도 됩니다. 항목 합계는 고지서의 당월 부과액과 같아야 합니다. 날짜는 납부 마감일(없으면 고지 월의 말일)을 씁니다. 연체료·미납액 같은 이전 달 금액은 제외합니다.',
+    '- 아파트 관리비 고지서: 고정지출 아래로, 전기·수도·가스·난방·급탕 같은 세대 사용료는 "공과금", 일반관리비·경비·청소·승강기 같은 공용 항목은 "관리비"로 묶어 기록하세요. 항목 합계는 고지서의 당월 부과액과 같아야 합니다. 날짜는 납부 마감일(없으면 고지 월의 말일)을 씁니다. 연체료·미납액 같은 이전 달 금액은 제외합니다.',
+    '- 고정지출 대분류: 월세·대출이자(주거비), 관리비, 전기·가스·수도(공과금), 보험료, 휴대폰·인터넷(통신비), OTT·멤버십 등 정기결제(구독료)는 다른 대분류보다 "고정지출"을 우선합니다.',
+    '- 용돈: 부부 각자 쓰는 개인 용돈. 소분류는 "용돈"입니다.',
     '- 영수증: 결제 1건을 하나의 거래로 기록합니다. 품목이 여러 카테고리에 걸쳐 크게 나뉘면(예: 마트에서 식료품과 가전) 나눠도 됩니다.',
     '- 급여명세서: 실수령액을 급여 수입 1건으로 기록합니다.',
     '- 여러 파일을 함께 올렸을 때 같은 결제가 두 곳에 나오면(예: 영수증 사진과 카드 이용내역) 한 번만 기록하고, 날짜·결제수단은 카드/은행 내역을 따릅니다.',
@@ -1015,7 +1117,7 @@ function commitUpload_(body, me) {
     }
   });
   append_('upload', [{ ID: uploadId, 일시: stamp, 파일: (body.filenames || []).join(', '), 문서종류: body.document_type || '', 요약: body.summary || '', 올린사람: me.name, 저장건수: items.length }]);
-  refreshMonthly_();
+  refreshReports_((body.items || []).filter(function (i) { return i.include || (filled && i.duplicate); }).map(function (i) { return String(i.date).slice(0, 7); }));
   return { saved: items.length, filled: filled };
 }
 

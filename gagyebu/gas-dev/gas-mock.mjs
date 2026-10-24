@@ -6,7 +6,22 @@ import vm from 'node:vm'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const CODE = fs.readFileSync(path.join(here, '../gas/Code.js'), 'utf8')
+// Apps Script처럼 gas/ 안의 .js 파일을 모두 같은 전역에서 실행한다.
+const gasDir = path.join(here, '../gas')
+const CODE = fs
+  .readdirSync(gasDir)
+  .filter((f) => f.endsWith('.js'))
+  .sort()
+  .map((f) => fs.readFileSync(path.join(gasDir, f), 'utf8'))
+  .join('\n;\n')
+
+/** 서식 지정처럼 결과를 검사하지 않는 메서드는 아무것도 하지 않고 자기 자신을 돌려준다. */
+function chainable(target = {}) {
+  const proxy = new Proxy(target, {
+    get: (t, k) => (k in t ? t[k] : typeof k === 'string' ? () => proxy : undefined),
+  })
+  return proxy
+}
 
 // 스크립트 쪽의 `instanceof Date`가 통하도록 vm 컨텍스트 안의 Date로 만든다.
 let ScriptDate = Date
@@ -19,6 +34,8 @@ function coerce(v) {
 class Range {
   constructor(sheet, row, col, nrows, ncols) {
     Object.assign(this, { sheet, row, col, nrows, ncols })
+    // 알 수 없는 서식 메서드(setBackground 등)는 그냥 통과
+    return new Proxy(this, { get: (t, k) => (k in t ? t[k] : typeof k === 'string' ? () => t : undefined) })
   }
   getValues() {
     const out = []
@@ -79,6 +96,36 @@ class Sheet {
     this.data.splice(r - 1, 1)
   }
   setFrozenRows() {}
+  clear() {
+    this.data = []
+    return this
+  }
+  getRangeList() {
+    return chainable()
+  }
+  setColumnWidth() {
+    return this
+  }
+  getCharts() {
+    return this.charts ?? []
+  }
+  newChart() {
+    return chainable({ build: () => ({ chart: true }) })
+  }
+  insertChart(c) {
+    ;(this.charts ??= []).push(c)
+  }
+  /** 테스트용: 값이 들어 있는 칸을 찾는다 → [행, 열] (1부터) */
+  find(text) {
+    for (let r = 0; r < this.data.length; r++) {
+      const c = (this.data[r] ?? []).findIndex((v) => v === text)
+      if (c >= 0) return [r + 1, c + 1]
+    }
+    return null
+  }
+  cell(r, c) {
+    return (this.data[r - 1] ?? [])[c - 1]
+  }
 }
 
 export function createGas({ persistFile } = {}) {
@@ -91,7 +138,13 @@ export function createGas({ persistFile } = {}) {
     Object.assign(props, saved.props)
   }
   const editors = []
+  let active = null
   const spreadsheet = {
+    setActiveSheet: (sh) => (active = sh),
+    moveActiveSheet: (pos) => {
+      sheets.splice(sheets.indexOf(active), 1)
+      sheets.splice(pos - 1, 0, active)
+    },
     getSheetByName: (n) => sheets.find((s) => s.name === n) ?? null,
     insertSheet: (n) => {
       const s = new Sheet(n)

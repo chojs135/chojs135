@@ -264,6 +264,54 @@ function ApiKey({ ctx }: { ctx: Ctx }) {
   )
 }
 
+function SheetReports({ ctx }: { ctx: Ctx }) {
+  const [info, setInfo] = useState<{ year: number; years: number[] } | null>(null)
+  const [year, setYear] = useState(0)
+  const [msg, setMsg] = useState('')
+  useEffect(() => {
+    api<{ year: number; years: number[] }>('/reports').then((r) => {
+      setInfo(r)
+      setYear(r.year)
+    })
+  }, [])
+  if (!info) return null
+  return (
+    <section className="card">
+      <h3>구글 시트 정리</h3>
+      <p className="small muted">
+        시트의 <b>통합시트</b>와 <b>1월~12월</b> 탭은 보내주신 엑셀 가계부처럼 자동으로 정리돼요(내역을 올리거나 고칠 때마다 갱신). 원본은 <b>거래내역</b> 탭이라, 정리 탭에 직접 적은 내용은 다시 그릴 때 지워져요.
+      </p>
+      <div className="actions">
+        <select value={year} onChange={(e) => setYear(Number(e.target.value))}>
+          {info.years.map((y) => (
+            <option key={y} value={y}>
+              {y}년
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={async () => {
+            setMsg('정리하는 중… (10초쯤 걸려요)')
+            try {
+              const r = await api<{ year: number }>('/reports', { body: { year } })
+              setMsg(`✅ ${r.year}년 기준으로 다시 정리했어요.`)
+            } catch (e) {
+              setMsg(`❌ ${(e as Error).message}`)
+            }
+          }}
+        >
+          🔄 이 연도로 다시 정리
+        </button>
+        <span style={{ flex: 1 }} />
+        <a className="button-link" href={ctx.me.sheetUrl} target="_blank" rel="noreferrer">
+          📗 시트 열기
+        </a>
+      </div>
+      {msg && <p className="small">{msg}</p>}
+    </section>
+  )
+}
+
 function ModelPicker({ ctx }: { ctx: Ctx }) {
   const [msg, setMsg] = useState('')
   return (
@@ -313,6 +361,7 @@ export default function Settings({ ctx }: { ctx: Ctx }) {
           📗 구글 시트 열기
         </a>
       </section>
+      <SheetReports ctx={ctx} />
       <Members ctx={ctx} />
       <ApiKey ctx={ctx} />
       <ModelPicker ctx={ctx} />
