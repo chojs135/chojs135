@@ -10,32 +10,37 @@
 var SHEETS = {
   tx: {
     name: '거래내역',
-    headers: ['ID', '날짜', '구분', '금액', '카테고리', '세부항목', '가맹점', '내용', '결제수단', '사용자', '메모', '입력방식', '업로드ID', '입력자', '입력일시', '수정일시'],
+    headers: ['ID', '날짜', '구분', '금액', '카테고리', '세부항목', '가맹점', '내용', '결제수단', '사용자', '고정', '태그', '메모', '입력방식', '업로드ID', '입력자', '입력일시', '수정일시'],
   },
   cat: { name: '카테고리', headers: ['ID', '구분', '이름', '아이콘', '색', '세부항목', '순서'] },
   budget: { name: '예산', headers: ['카테고리', '월 예산'] },
   rule: { name: '자동분류규칙', headers: ['키워드', '구분', '카테고리', '세부항목', '수정일시'] },
   member: { name: '구성원', headers: ['ID', '이메일', '이름', '추가일시'] },
   upload: { name: '업로드기록', headers: ['ID', '일시', '파일', '문서종류', '요약', '올린사람', '저장건수'] },
-  monthly: { name: '월별요약', headers: ['월', '수입', '지출', '남은 돈', '저축률(%)'] },
+  monthly: { name: '월별요약', headers: ['월', '수입', '지출', '저축', '남은 돈', '저축률(%)'] },
 };
-var TYPE_KO = { expense: '지출', income: '수입', transfer: '이체' };
-var KO_TYPE = { 지출: 'expense', 수입: 'income', 이체: 'transfer' };
+// 저축은 쓴 돈도 버는 돈도 아니지만 "얼마나 모았나"를 보려고 따로 센다.
+// 이체(카드대금, 내 계좌 간 이동)는 통계에서 완전히 빠진다.
+var TYPE_KO = { expense: '지출', income: '수입', saving: '저축', transfer: '이체' };
+var KO_TYPE = { 지출: 'expense', 수입: 'income', 저축: 'saving', 이체: 'transfer' };
+var FIXED = '고정';
 var SHARED = '공동';
 var DEFAULT_MODEL = 'claude-opus-5-5';
 
 var DEFAULT_CATEGORIES = [
-  ['expense', '식비', '🍚', '#f97316', ['장보기', '외식', '배달', '카페/간식']],
-  ['expense', '주거/관리비', '🏠', '#0ea5e9', ['관리비', '전기', '수도', '가스/난방', '월세/대출이자', '인터넷/TV', '수선/유지']],
+  ['expense', '식비', '🍚', '#f97316', ['장보기', '외식', '배달', '카페/간식', '편의점']],
+  ['expense', '주거/관리비', '🏠', '#0ea5e9', ['관리비', '전기', '수도', '가스/난방', '월세', '대출이자', '인터넷/TV', '수선/유지']],
   ['expense', '생활용품', '🧺', '#14b8a6', ['생필품', '가구/가전', '주방용품']],
   ['expense', '교통/차량', '🚗', '#6366f1', ['대중교통', '택시', '주유/충전', '주차/통행료', '정비/세차', '자동차보험']],
-  ['expense', '통신', '📱', '#8b5cf6', ['휴대폰']],
-  ['expense', '의료/건강', '💊', '#ef4444', ['병원', '약국', '운동', '건강식품']],
+  ['expense', '통신/구독', '📱', '#8b5cf6', ['휴대폰', '구독서비스', '멤버십']],
+  ['expense', '의료/건강', '💊', '#ef4444', ['병원/약국', '영양제', '운동']],
   ['expense', '의류/미용', '👕', '#ec4899', ['의류', '신발/잡화', '미용실', '화장품']],
-  ['expense', '교육/육아', '📚', '#eab308', ['학원/강의', '도서', '육아용품', '어린이집/학교']],
-  ['expense', '문화/여가', '🎬', '#22c55e', ['여행/숙박', '취미', '구독서비스', '영화/공연', '게임']],
-  ['expense', '경조사/선물', '🎁', '#f43f5e', ['경조사비', '선물', '부모님 용돈', '기부']],
+  ['expense', '교육/자기계발', '📚', '#eab308', ['학원/강의', '도서', '자격증', '육아/학교']],
+  ['expense', '문화/여가', '🎬', '#22c55e', ['여행/숙박', '취미', '영화/공연', '게임']],
+  ['expense', '경조사/선물', '🎁', '#f43f5e', ['경조사비', '선물', '부모님', '모임회비']],
+  ['expense', '용돈', '👛', '#d946ef', ['개인 용돈']],
   ['expense', '보험/세금', '🧾', '#64748b', ['보험료', '세금/공과금', '수수료']],
+  ['expense', '기부', '🤝', '#10b981', ['정기후원', '비정기']],
   ['expense', '반려동물', '🐾', '#a16207', ['사료/간식', '병원', '용품']],
   ['expense', '기타지출', '📦', '#9ca3af', []],
   ['income', '급여', '💼', '#16a34a', ['월급', '상여금']],
@@ -43,8 +48,11 @@ var DEFAULT_CATEGORIES = [
   ['income', '금융수입', '🏦', '#2563eb', ['이자', '배당', '투자수익']],
   ['income', '환급/지원금', '↩️', '#7c3aed', ['세금환급', '정부지원금', '환불']],
   ['income', '기타수입', '➕', '#9ca3af', ['용돈', '기타']],
+  ['saving', '저축', '🐷', '#0284c7', ['적금', '예금', '주택청약', '비상금/파킹통장']],
+  ['saving', '투자', '📈', '#7c3aed', ['주식/ETF', '연금/IRP', '공제회', '기타투자']],
+  ['saving', '대출상환', '🏦', '#475569', ['원금 상환']],
   // 통계에서 빠지는 돈의 이동. 카드대금 출금이나 내 계좌 간 이체를 지출로 세면 이중 집계가 된다.
-  ['transfer', '이체/저축', '🔁', '#94a3b8', ['카드대금', '내 계좌 이체', '적금/저축', '투자', '대출상환(원금)']],
+  ['transfer', '이체', '🔁', '#94a3b8', ['카드대금', '내 계좌 이체', '기타']],
 ];
 
 // ---------------------------------------------------------------- 진입점
@@ -90,7 +98,7 @@ function sheet_(key) {
       sh.getRange('D:D').setNumberFormat('#,##0');
     }
     if (key === 'budget') sh.getRange('B:B').setNumberFormat('#,##0');
-    if (key === 'monthly') sh.getRange('B:D').setNumberFormat('#,##0');
+    if (key === 'monthly') sh.getRange('B:E').setNumberFormat('#,##0');
   }
   return sh;
 }
@@ -255,6 +263,8 @@ function txFromRow_(r, cats, members) {
     description: String(r['내용'] || ''),
     payment_method: String(r['결제수단'] || ''),
     member_id: memberIdByName_(members, String(r['사용자'])),
+    fixed: String(r['고정']) === FIXED,
+    tags: splitTags_(r['태그']),
     memo: String(r['메모'] || ''),
     source: r['입력방식'] === '자동' ? 'upload' : 'manual',
     created_by_name: String(r['입력자'] || ''),
@@ -288,10 +298,22 @@ function txToRow_(t, cats, members, extra) {
       내용: t.description || '',
       결제수단: t.payment_method || '',
       사용자: memberNameById_(members, t.member_id),
+      고정: t.fixed ? FIXED : '',
+      태그: splitTags_(t.tags).join(', '),
       메모: t.memo || '',
     },
     extra,
   );
+}
+
+function splitTags_(v) {
+  var list = Array.isArray(v) ? v : String(v || '').split(',');
+  var out = [];
+  list.forEach(function (t) {
+    t = String(t).replace(/^#/, '').trim();
+    if (t && out.indexOf(t) < 0) out.push(t);
+  });
+  return out;
 }
 
 /** 가맹점명에서 규칙 키워드를 만든다. 지점명/괄호/숫자를 떼서 "스타벅스 강남점" → "스타벅스". */
@@ -328,16 +350,15 @@ function refreshMonthly_() {
   var by = {};
   allTx_().forEach(function (t) {
     var m = t.date.slice(0, 7);
-    by[m] = by[m] || { income: 0, expense: 0 };
-    if (t.type === 'income') by[m].income += t.amount;
-    if (t.type === 'expense') by[m].expense += t.amount;
+    by[m] = by[m] || { income: 0, expense: 0, saving: 0 };
+    if (by[m][t.type] !== undefined) by[m][t.type] += t.amount;
   });
   var months = Object.keys(by).sort().reverse();
   var sh = sheet_('monthly');
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, SHEETS.monthly.headers.length).clearContent();
   append_('monthly', months.map(function (m) {
     var v = by[m];
-    return { 월: m, 수입: v.income, 지출: v.expense, '남은 돈': v.income - v.expense, '저축률(%)': v.income ? Math.round(((v.income - v.expense) / v.income) * 1000) / 10 : '' };
+    return { 월: m, 수입: v.income, 지출: v.expense, 저축: v.saving, '남은 돈': v.income - v.expense - v.saving, '저축률(%)': v.income ? Math.round((v.saving / v.income) * 1000) / 10 : '' };
   }));
 }
 
@@ -404,6 +425,8 @@ function route_(method, path, body) {
         return { id: Number(u.ID), created_at: String(u['일시']), filenames: String(u['파일']), doc_type: String(u['문서종류']), summary: String(u['요약']), created_by_name: String(u['올린사람']), tx_count: Number(u['저장건수']) || 0 };
       });
 
+    case 'GET /annual':
+      return annualStats_(Number(q.year) || Number(Utilities.formatDate(new Date(), tz_(), 'yyyy')));
     case 'GET /stats':
       return monthlyStats_(q.month, q.member_id === 'shared' ? 'shared' : q.member_id ? Number(q.member_id) : undefined);
 
@@ -574,8 +597,10 @@ function listTx_(q) {
     if (q.category_id && t.category_id !== Number(q.category_id)) return false;
     if (q.member_id === 'shared' && t.member_id !== null) return false;
     if (q.member_id && q.member_id !== 'shared' && t.member_id !== Number(q.member_id)) return false;
+    if (q.tag && t.tags.indexOf(q.tag) < 0) return false;
+    if (q.fixed === '1' && !t.fixed) return false;
     if (q.q) {
-      var s = (t.merchant + ' ' + t.description + ' ' + t.memo).toLowerCase();
+      var s = (t.merchant + ' ' + t.description + ' ' + t.memo + ' ' + t.tags.join(' ')).toLowerCase();
       if (s.indexOf(q.q.toLowerCase()) < 0) return false;
     }
     return true;
@@ -647,16 +672,17 @@ function analysisContext_() {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['date', 'type', 'amount', 'merchant', 'description', 'category', 'subcategory', 'payment_method', 'confidence', 'note'],
+            required: ['date', 'type', 'amount', 'merchant', 'description', 'category', 'subcategory', 'payment_method', 'fixed', 'confidence', 'note'],
             properties: {
               date: { type: 'string' },
-              type: { type: 'string', enum: ['expense', 'income', 'transfer'] },
+              type: { type: 'string', enum: ['expense', 'income', 'saving', 'transfer'] },
               amount: { type: 'number' },
               merchant: { type: 'string' },
               description: { type: 'string' },
               category: { type: 'string', enum: names },
               subcategory: { type: 'string' },
               payment_method: { type: 'string' },
+              fixed: { type: 'boolean' },
               confidence: { type: 'number' },
               note: { type: 'string' },
             },
@@ -683,16 +709,21 @@ function systemPrompt_(cats, rules) {
     '당신은 한국 가정의 가계부 정리를 돕는 회계 도우미입니다. 사용자가 올린 은행/카드 거래내역서(PDF·엑셀·CSV), 영수증, 아파트 관리비 고지서, 급여명세서 등의 스크린샷이나 문서에서 거래를 빠짐없이 뽑아 분류합니다.',
     '',
     '## 분류 기준',
-    'type은 셋 중 하나입니다.',
-    '- expense(지출): 실제로 돈을 쓴 것.',
+    'type은 넷 중 하나입니다.',
+    '- expense(지출): 실제로 돈을 쓴 것. 대출 이자는 지출입니다.',
     '- income(수입): 급여, 이자, 환급 등 들어온 돈.',
-    '- transfer(이체): 가계의 순자산이 변하지 않는 돈의 이동. 통계에서 제외됩니다. 신용카드 대금 출금, 본인/배우자 명의 계좌 간 이체, 적금·저축·투자 계좌로 이체, 대출 원금 상환이 여기에 해당합니다. 카드대금을 지출로 잡으면 카드 내역과 이중으로 집계되므로 반드시 transfer로 분류하세요.',
+    '- saving(저축): 미래를 위해 모으는 돈. 적금·예금·청약 납입, 증권/연금/IRP/공제회 계좌로 넣은 돈, 대출 원금 상환.',
+    '- transfer(이체): 통계에서 빠지는 단순한 돈의 이동. 신용카드 대금 출금, 본인/배우자 명의 생활비 계좌 간 이체. 카드대금을 지출로 잡으면 카드 내역과 이중으로 집계되므로 반드시 transfer로 분류하세요.',
+    '',
+    'fixed는 매달 정해진 날 거의 같은 금액이 나가는 고정지출이면 true입니다(월세, 관리비, 통신비, 보험료, 구독료, 대출이자, 정기 학원비, 정기후원, 자동이체 적금 등). 장보기·외식처럼 그때그때 쓰는 돈은 false입니다.',
     '',
     'category는 아래 목록의 이름 중 하나를 정확히 그대로 쓰고, subcategory는 해당 카테고리의 세부항목 중 하나(없으면 빈 문자열)를 씁니다.',
     '',
     '지출 카테고리:\n' + list('expense'),
     '',
     '수입 카테고리:\n' + list('income'),
+    '',
+    '저축 카테고리:\n' + list('saving'),
     '',
     '이체 카테고리:\n' + list('transfer'),
     '',
@@ -753,6 +784,8 @@ function prepareUpload_(body) {
       description: t.description || '',
       payment_method: t.payment_method || '',
       member_id: memberId,
+      fixed: !!t.fixed,
+      tags: [],
       memo: '',
       confidence: Number(t.confidence) || 0,
       note: t.note || '',
@@ -804,65 +837,95 @@ function shiftMonth_(month, delta) {
   return y + '-' + (m < 9 ? '0' : '') + (m + 1);
 }
 
+function daysInMonth_(month) {
+  return new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate();
+}
+
+function filterMember_(list, member) {
+  return list.filter(function (t) {
+    if (member === undefined) return true;
+    if (member === 'shared') return t.member_id === null;
+    return t.member_id === member;
+  });
+}
+
+function sumType_(list, type) {
+  return list.filter(function (t) { return t.type === type; }).reduce(function (a, t) { return a + t.amount; }, 0);
+}
+
+function groupBy_(list, keyFn) {
+  var g = {};
+  list.forEach(function (t) {
+    var k = keyFn(t);
+    g[k] = g[k] || { amount: 0, count: 0 };
+    g[k].amount += t.amount;
+    g[k].count += 1;
+  });
+  return g;
+}
+
+/** 저축률 = 저축 ÷ 수입. 남은 돈 = 수입 − 지출 − 저축 */
+function summary_(list) {
+  var income = sumType_(list, 'income');
+  var expense = sumType_(list, 'expense');
+  var saving = sumType_(list, 'saving');
+  return {
+    income: income,
+    expense: expense,
+    saving: saving,
+    net: income - expense - saving,
+    savingsRate: income ? Math.round((saving / income) * 1000) / 10 : null,
+  };
+}
+
 function monthlyStats_(month, member) {
   month = month || Utilities.formatDate(new Date(), tz_(), 'yyyy-MM');
   var cats = categories_();
   var members = members_();
   var all = allTx_();
-  var mine = all.filter(function (t) {
-    if (member === undefined) return true;
-    if (member === 'shared') return t.member_id === null;
-    return t.member_id === member;
-  });
+  var mine = filterMember_(all, member);
   function inMonth(list, m) { return list.filter(function (t) { return t.date.slice(0, 7) === m; }); }
-  function sum(list, type) { return list.filter(function (t) { return t.type === type; }).reduce(function (a, t) { return a + t.amount; }, 0); }
 
   var cur = inMonth(mine, month);
   var prevMonth = shiftMonth_(month, -1);
   var prev = inMonth(mine, prevMonth);
-  var income = sum(cur, 'income');
-  var expense = sum(cur, 'expense');
+  var sum = summary_(cur);
 
   var budgets = {};
   if (member === undefined) budgets_().forEach(function (b) { budgets[b.category_id] = b.amount; });
 
-  function groupBy(list, keyFn) {
-    var g = {};
-    list.forEach(function (t) {
-      var k = keyFn(t);
-      g[k] = g[k] || { amount: 0, count: 0 };
-      g[k].amount += t.amount;
-      g[k].count += 1;
-    });
-    return g;
-  }
-
   var curExp = cur.filter(function (t) { return t.type === 'expense'; });
-  var prevCat = groupBy(prev.filter(function (t) { return t.type === 'expense'; }), function (t) { return String(t.category_id); });
+  var prevCat = groupBy_(prev.filter(function (t) { return t.type === 'expense'; }), function (t) { return String(t.category_id); });
   var last3 = mine.filter(function (t) {
     var m = t.date.slice(0, 7);
     return t.type === 'expense' && m >= shiftMonth_(month, -3) && m <= prevMonth;
   });
-  var avg3 = groupBy(last3, function (t) { return String(t.category_id); });
+  var avg3 = groupBy_(last3, function (t) { return String(t.category_id); });
 
-  var catGroups = groupBy(curExp, function (t) { return String(t.category_id); });
-  var byCategory = Object.keys(catGroups)
-    .map(function (k) {
-      var c = cats.filter(function (x) { return String(x.id) === k; })[0];
-      return {
-        id: c ? c.id : null,
-        name: c ? c.name : '미분류',
-        icon: c ? c.icon : '',
-        color: c ? c.color : '#9ca3af',
-        amount: catGroups[k].amount,
-        count: catGroups[k].count,
-        budget: c && budgets[c.id] ? budgets[c.id] : null,
-        prevAmount: prevCat[k] ? prevCat[k].amount : 0,
-      };
-    })
-    .sort(function (a, b) { return b.amount - a.amount; });
+  function categoryRows(list) {
+    var g = groupBy_(list, function (t) { return String(t.category_id); });
+    return Object.keys(g)
+      .map(function (k) {
+        var c = cats.filter(function (x) { return String(x.id) === k; })[0];
+        return {
+          id: c ? c.id : null,
+          name: c ? c.name : '미분류',
+          icon: c ? c.icon : '',
+          color: c ? c.color : '#9ca3af',
+          amount: g[k].amount,
+          count: g[k].count,
+          budget: c && budgets[c.id] ? budgets[c.id] : null,
+          prevAmount: prevCat[k] ? prevCat[k].amount : 0,
+        };
+      })
+      .sort(function (a, b) { return b.amount - a.amount; });
+  }
+  var byCategory = categoryRows(curExp);
+  var bySaving = categoryRows(cur.filter(function (t) { return t.type === 'saving'; })).map(function (c) {
+    return { id: c.id, name: c.name, icon: c.icon, amount: c.amount, count: c.count };
+  });
 
-  var subGroups = groupBy(curExp, function (t) { return (t.category_name || '미분류') + '|' + t.subcategory; });
+  var subGroups = groupBy_(curExp, function (t) { return (t.category_name || '미분류') + '|' + t.subcategory; });
   var bySubcategory = Object.keys(subGroups)
     .map(function (k) { var p = k.split('|'); return { category: p[0], subcategory: p[1], amount: subGroups[k].amount }; })
     .sort(function (a, b) { return b.amount - a.amount; });
@@ -870,21 +933,48 @@ function monthlyStats_(month, member) {
   // 사람별 합계는 보기 전환과 무관하게 항상 가구 전체 기준
   var everyone = inMonth(all, month);
   var byMember = [{ id: null, name: SHARED }].concat(members).map(function (m) {
-    var list = everyone.filter(function (t) { return t.member_id === (m.id === null ? null : m.id); });
-    return { name: m.name, expense: sum(list, 'expense'), income: sum(list, 'income') };
-  }).filter(function (m) { return m.expense || m.income; });
+    var list = everyone.filter(function (t) { return t.member_id === m.id; });
+    return { name: m.name, expense: sumType_(list, 'expense'), income: sumType_(list, 'income'), saving: sumType_(list, 'saving') };
+  }).filter(function (m) { return m.expense || m.income || m.saving; });
 
-  var dayGroups = groupBy(curExp, function (t) { return t.date; });
-  var daily = Object.keys(dayGroups).sort().map(function (d) { return { date: d, amount: dayGroups[d].amount }; });
+  var payGroups = groupBy_(curExp, function (t) { return t.payment_method || '미입력'; });
+  var byPayment = Object.keys(payGroups)
+    .map(function (k) { return { method: k, amount: payGroups[k].amount, count: payGroups[k].count }; })
+    .sort(function (a, b) { return b.amount - a.amount; });
+
+  var fixedExpense = curExp.filter(function (t) { return t.fixed; }).reduce(function (a, t) { return a + t.amount; }, 0);
+
+  var tagGroups = {};
+  curExp.forEach(function (t) {
+    t.tags.forEach(function (tag) {
+      tagGroups[tag] = tagGroups[tag] || { tag: tag, amount: 0, count: 0 };
+      tagGroups[tag].amount += t.amount;
+      tagGroups[tag].count += 1;
+    });
+  });
+  var byTag = Object.keys(tagGroups).map(function (k) { return tagGroups[k]; }).sort(function (a, b) { return b.amount - a.amount; });
+
+  // 달력: 날짜별 지출/수입, 무지출일(오늘까지 지난 날 중 지출이 없는 날)
+  var todayStr = Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
+  var calendar = [];
+  var noSpendDays = 0;
+  for (var d = 1; d <= daysInMonth_(month); d++) {
+    var date = month + '-' + (d < 10 ? '0' : '') + d;
+    var day = cur.filter(function (t) { return t.date === date; });
+    var exp = sumType_(day, 'expense');
+    var past = date <= todayStr;
+    if (past && exp === 0) noSpendDays++;
+    calendar.push({ date: date, expense: exp, income: sumType_(day, 'income'), saving: sumType_(day, 'saving'), noSpend: past && exp === 0, future: !past });
+  }
 
   var trend = [];
   for (var i = 11; i >= 0; i--) {
     var m = shiftMonth_(month, -i);
-    var list = inMonth(mine, m);
-    trend.push({ month: m, income: sum(list, 'income'), expense: sum(list, 'expense') });
+    var ms = summary_(inMonth(mine, m));
+    trend.push({ month: m, income: ms.income, expense: ms.expense, saving: ms.saving });
   }
 
-  var merchGroups = groupBy(curExp.filter(function (t) { return t.merchant; }), function (t) { return t.merchant; });
+  var merchGroups = groupBy_(curExp.filter(function (t) { return t.merchant; }), function (t) { return t.merchant; });
   var topMerchants = Object.keys(merchGroups)
     .map(function (k) { return { merchant: k, amount: merchGroups[k].amount, count: merchGroups[k].count }; })
     .sort(function (a, b) { return b.amount - a.amount; })
@@ -895,25 +985,81 @@ function monthlyStats_(month, member) {
   byCategory.forEach(function (c) {
     var a = avg3[String(c.id)] ? avg3[String(c.id)].amount / 3 : 0;
     if (a > 0 && c.amount > a * 1.3 && c.amount - a > 50000) {
-      insights.push(c.name + ' 지출이 최근 3개월 평균보다 ' + Math.round((c.amount / a - 1) * 100) + '% 많아요.');
+      insights.push({ level: 'warn', text: c.name + ' 지출이 최근 3개월 평균보다 ' + Math.round((c.amount / a - 1) * 100) + '% 많아요.' });
     }
-    if (c.budget && c.amount > c.budget) insights.push(c.name + ' 예산을 ' + (c.amount - c.budget).toLocaleString('ko-KR') + '원 초과했어요.');
+    if (c.budget && c.amount > c.budget) insights.push({ level: 'warn', text: c.name + ' 예산을 ' + (c.amount - c.budget).toLocaleString('ko-KR') + '원 초과했어요.' });
   });
+  if (sum.expense && sum.net < 0) insights.push({ level: 'warn', text: '이번 달은 들어온 돈보다 ' + (-sum.net).toLocaleString('ko-KR') + '원 더 썼어요.' });
+  var regret = tagGroups['반성'];
+  if (regret) insights.push({ level: 'info', text: '#반성 태그 ' + regret.count + '건, ' + regret.amount.toLocaleString('ko-KR') + '원이에요.' });
+  if (noSpendDays >= 5) insights.push({ level: 'good', text: '무지출 데이 ' + noSpendDays + '일! 잘하고 있어요.' });
 
   return {
     month: month,
-    income: income,
-    expense: expense,
-    net: income - expense,
+    income: sum.income,
+    expense: sum.expense,
+    saving: sum.saving,
+    net: sum.net,
+    savingsRate: sum.savingsRate,
     count: cur.length,
-    savingsRate: income ? Math.round(((income - expense) / income) * 1000) / 10 : null,
-    prev: { income: sum(prev, 'income'), expense: sum(prev, 'expense') },
+    fixedExpense: fixedExpense,
+    prev: summary_(prev),
     byCategory: byCategory,
+    bySaving: bySaving,
     bySubcategory: bySubcategory,
     byMember: byMember,
-    daily: daily,
+    byPayment: byPayment,
+    byTag: byTag,
+    calendar: calendar,
+    noSpendDays: noSpendDays,
     trend: trend,
     topMerchants: topMerchants,
     insights: insights,
+  };
+}
+
+/** 연간 리포트: 구분별 카테고리 × 12개월 표, 합계와 (기록이 있는 달 기준) 월평균 */
+function annualStats_(year) {
+  var cats = categories_();
+  var all = allTx_().filter(function (t) { return t.date.slice(0, 4) === String(year); });
+  var months = [];
+  for (var m = 1; m <= 12; m++) months.push(year + '-' + (m < 10 ? '0' : '') + m);
+  var activeMonths = months.filter(function (m) { return all.some(function (t) { return t.date.slice(0, 7) === m; }); }).length || 1;
+
+  function table(type) {
+    var list = all.filter(function (t) { return t.type === type; });
+    var rows = {};
+    list.forEach(function (t) {
+      var c = cats.filter(function (x) { return x.id === t.category_id; })[0];
+      var key = c ? c.name : '미분류';
+      rows[key] = rows[key] || { name: key, icon: c ? c.icon : '', sort: c ? c.sort : 999, months: months.map(function () { return 0; }), total: 0 };
+      rows[key].months[Number(t.date.slice(5, 7)) - 1] += t.amount;
+      rows[key].total += t.amount;
+    });
+    var out = Object.keys(rows).map(function (k) {
+      var r = rows[k];
+      return { name: r.name, icon: r.icon, months: r.months, total: r.total, average: Math.round(r.total / activeMonths), sort: r.sort };
+    });
+    out.sort(function (a, b) { return a.sort - b.sort; });
+    return out.map(function (r) { delete r.sort; return r; });
+  }
+
+  var totals = months.map(function (m) {
+    var s = summary_(all.filter(function (t) { return t.date.slice(0, 7) === m; }));
+    return { month: m, income: s.income, expense: s.expense, saving: s.saving, net: s.net };
+  });
+  var year_ = summary_(all);
+  return {
+    year: year,
+    activeMonths: activeMonths,
+    income: year_.income,
+    expense: year_.expense,
+    saving: year_.saving,
+    net: year_.net,
+    savingsRate: year_.savingsRate,
+    totals: totals,
+    incomeTable: table('income'),
+    expenseTable: table('expense'),
+    savingTable: table('saving'),
   };
 }

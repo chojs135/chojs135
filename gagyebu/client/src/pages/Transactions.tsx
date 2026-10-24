@@ -43,6 +43,7 @@ export default function Transactions({ ctx }: { ctx: Ctx }) {
           <option value="">전체</option>
           <option value="expense">지출</option>
           <option value="income">수입</option>
+          <option value="saving">저축</option>
           <option value="transfer">이체</option>
         </select>
         <select value={filter.category_id} onChange={(e) => setFilter({ ...filter, category_id: e.target.value })}>
@@ -65,7 +66,7 @@ export default function Transactions({ ctx }: { ctx: Ctx }) {
         <button
           className="primary"
           onClick={() =>
-            setEditing({ date: today(), type: 'expense', amount: 0, category_id: null, subcategory: '', merchant: '', description: '', payment_method: '', member_id: ctx.me.user.id, memo: '' })
+            setEditing({ date: today(), type: 'expense', amount: 0, category_id: null, subcategory: '', merchant: '', description: '', payment_method: '', member_id: ctx.me.user.id, fixed: false, tags: [], memo: '' })
           }
         >
           ＋ 직접 입력
@@ -75,6 +76,7 @@ export default function Transactions({ ctx }: { ctx: Ctx }) {
       <div className="summary-line">
         <span>수입 <b className="income">{won(sum('income'))}</b></span>
         <span>지출 <b className="expense">{won(sum('expense'))}</b></span>
+        {sum('saving') > 0 && <span>저축 <b className="saving">{won(sum('saving'))}</b></span>}
         <span className="muted">{rows.length}건</span>
         <a className="muted small" href={ctx.me.sheetUrl} target="_blank" rel="noreferrer">구글 시트에서 보기</a>
       </div>
@@ -101,11 +103,19 @@ export default function Transactions({ ctx }: { ctx: Ctx }) {
                         {t.payment_method && ` · ${t.payment_method}`} · {memberName(t.member_id)}
                         {t.source === 'upload' && ' · 🤖'}
                       </div>
+                      {(t.fixed || t.tags.length > 0) && (
+                        <div className="badges">
+                          {t.fixed && <span className="badge">📌 고정</span>}
+                          {t.tags.map((tag) => (
+                            <span key={tag} className="badge">#{tag}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className={`tx-amount ${t.type}`}>
                       {t.type === 'expense' ? '-' : t.type === 'income' ? '+' : ''}
                       {won(t.amount)}
-                      {t.type === 'transfer' && <div className="muted small">{TYPE_LABEL.transfer}</div>}
+                      {(t.type === 'transfer' || t.type === 'saving') && <div className="muted small">{TYPE_LABEL[t.type]}</div>}
                     </div>
                   </li>
                 )

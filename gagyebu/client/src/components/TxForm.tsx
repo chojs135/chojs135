@@ -49,6 +49,41 @@ export function MemberSelect({ members, value, onChange }: { members: Member[]; 
   )
 }
 
+/** 쉼표로 구분한 태그 입력. 자주 쓰는 태그는 눌러서 추가. */
+export function TagInput({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(value.join(', '))
+  const commit = (t: string) => onChange([...new Set(t.split(',').map((x) => x.replace(/^#/, '').trim()).filter(Boolean))])
+  return (
+    <div className="tag-input">
+      <input
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value)
+          commit(e.target.value)
+        }}
+        placeholder="예: 반성, 확인필요, 여행"
+      />
+      <div className="tag-suggest">
+        {SUGGESTED_TAGS.filter((t) => !value.includes(t)).map((t) => (
+          <button
+            type="button"
+            key={t}
+            className="chip"
+            onClick={() => {
+              const next = [...value, t]
+              setText(next.join(', '))
+              onChange(next)
+            }}
+          >
+            #{t}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+const SUGGESTED_TAGS = ['반성', '확인필요', '여행', '경조사']
+
 export default function TxForm({
   initial,
   categories,
@@ -113,6 +148,13 @@ export default function TxForm({
             사용자 <MemberSelect members={members} value={t.member_id} onChange={(v) => set('member_id', v)} />
           </label>
         </div>
+        <label className="check">
+          <input type="checkbox" checked={t.fixed} onChange={(e) => set('fixed', e.target.checked)} />
+          매달 나가는 고정지출이에요 (관리비·통신비·보험·구독 등)
+        </label>
+        <label>
+          태그 <TagInput value={t.tags} onChange={(v) => set('tags', v)} />
+        </label>
         <label>
           메모 <input value={t.memo} onChange={(e) => set('memo', e.target.value)} />
         </label>

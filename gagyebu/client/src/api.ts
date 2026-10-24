@@ -1,4 +1,4 @@
-export type TxType = 'expense' | 'income' | 'transfer'
+export type TxType = 'expense' | 'income' | 'saving' | 'transfer'
 
 export type Category = {
   id: number
@@ -36,6 +36,8 @@ export type Tx = {
   description: string
   payment_method: string
   member_id: number | null
+  fixed: boolean
+  tags: string[]
   memo: string
   source?: string
   created_by_name?: string
@@ -51,21 +53,36 @@ export type DraftItem = Tx & {
   include: boolean
 }
 
-export type Stats = {
+type Summary = { income: number; expense: number; saving: number; net: number; savingsRate: number | null }
+
+export type Insight = { level: 'warn' | 'info' | 'good'; text: string }
+
+export type Stats = Summary & {
   month: string
-  income: number
-  expense: number
-  net: number
   count: number
-  savingsRate: number | null
-  prev: { income: number; expense: number }
+  fixedExpense: number
+  prev: Summary
   byCategory: { id: number | null; name: string; icon: string; color: string; amount: number; count: number; budget: number | null; prevAmount: number }[]
+  bySaving: { id: number | null; name: string; icon: string; amount: number; count: number }[]
   bySubcategory: { category: string; subcategory: string; amount: number }[]
-  byMember: { name: string; expense: number; income: number }[]
-  daily: { date: string; amount: number }[]
-  trend: { month: string; income: number; expense: number }[]
+  byMember: { name: string; expense: number; income: number; saving: number }[]
+  byPayment: { method: string; amount: number; count: number }[]
+  byTag: { tag: string; amount: number; count: number }[]
+  calendar: { date: string; expense: number; income: number; saving: number; noSpend: boolean; future: boolean }[]
+  noSpendDays: number
+  trend: { month: string; income: number; expense: number; saving: number }[]
   topMerchants: { merchant: string; amount: number; count: number }[]
-  insights: string[]
+  insights: Insight[]
+}
+
+export type AnnualRow = { name: string; icon: string; months: number[]; total: number; average: number }
+export type Annual = Summary & {
+  year: number
+  activeMonths: number
+  totals: { month: string; income: number; expense: number; saving: number; net: number }[]
+  incomeTable: AnnualRow[]
+  expenseTable: AnnualRow[]
+  savingTable: AnnualRow[]
 }
 
 export class ApiError extends Error {
@@ -117,7 +134,7 @@ export const shortWon = (n: number) => {
   if (a >= 10_000) return `${Math.round(n / 10_000).toLocaleString('ko-KR')}만`
   return n.toLocaleString('ko-KR')
 }
-export const TYPE_LABEL: Record<TxType, string> = { expense: '지출', income: '수입', transfer: '이체' }
+export const TYPE_LABEL: Record<TxType, string> = { expense: '지출', income: '수입', saving: '저축', transfer: '이체' }
 export const thisMonth = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 7)
 export const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
 export function shiftMonth(month: string, delta: number) {

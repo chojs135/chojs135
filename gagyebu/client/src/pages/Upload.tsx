@@ -80,6 +80,7 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
                   <select value={it.type} onChange={(e) => update(i, { type: e.target.value as TxType, category_id: null, subcategory: '' })}>
                     <option value="expense">지출</option>
                     <option value="income">수입</option>
+                    <option value="saving">저축</option>
                     <option value="transfer">이체</option>
                   </select>
                   <input className="amount" inputMode="numeric" value={it.amount.toLocaleString('ko-KR')} onChange={(e) => update(i, { amount: Number(e.target.value.replace(/[^0-9]/g, '')) })} />
@@ -93,6 +94,16 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
                   {it.payment_method && ` · ${it.payment_method}`}
                 </div>
                 <div className="badges">
+                  <button type="button" className={`chip ${it.fixed ? 'on' : ''}`} onClick={() => update(i, { fixed: !it.fixed })}>
+                    📌 고정{it.fixed ? ' ✓' : ''}
+                  </button>
+                  <button
+                    type="button"
+                    className={`chip ${it.tags.includes('반성') ? 'on' : ''}`}
+                    onClick={() => update(i, { tags: it.tags.includes('반성') ? it.tags.filter((x) => x !== '반성') : [...it.tags, '반성'] })}
+                  >
+                    #반성
+                  </button>
                   {it.duplicate && <span className="badge warn">⚠️ 이미 있는 내역일 수 있음</span>}
                   {it.rule_applied && <span className="badge">📌 우리집 규칙 적용</span>}
                   {it.confidence < 0.7 && <span className="badge warn">❓ 확인 필요{it.note ? `: ${it.note}` : ''}</span>}
@@ -105,6 +116,7 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: () => void
         <div className="sticky-actions card">
           <div className="small">
             {included.length}건 · 지출 {won(sum('expense'))} · 수입 {won(sum('income'))}
+            {sum('saving') > 0 && ` · 저축 ${won(sum('saving'))}`}
             {sum('transfer') > 0 && ` · 이체 ${won(sum('transfer'))}`}
           </div>
           {error && <div className="error">{error}</div>}

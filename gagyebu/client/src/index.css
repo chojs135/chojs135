@@ -14,6 +14,8 @@
   --danger: #dc2626;
   --series-1: #2a78d6; /* 수입 */
   --series-2: #eb6834; /* 지출 */
+  --series-3: #1baf7a; /* 저축 */
+  --good-bg: #dcfce7;
   --warn-bg: #fef3c7;
   --warn-text: #92400e;
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
@@ -35,6 +37,8 @@
     --danger: #f87171;
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-3: #199e70;
+    --good-bg: #0f2e1c;
     --warn-bg: #3b2f0a;
     --warn-text: #fcd34d;
   }
@@ -123,7 +127,7 @@ table.simple tr:last-child td { border-bottom: none; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .toolbar .search { flex: 1 1 200px; }
 .summary-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px; margin: 4px 2px 12px; }
-.income { color: var(--series-1); }
+.income { color: var(--text); }
 .expense { color: var(--text); }
 .day-head { font-size: 13px; color: var(--muted); margin: 14px 4px 6px; }
 .tx-list { list-style: none; margin: 0; padding: 0; }
@@ -134,7 +138,7 @@ table.simple tr:last-child td { border-bottom: none; }
 .tx-main { flex: 1; min-width: 0; }
 .tx-main > div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tx-amount { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tx-amount.income { color: var(--series-1); }
+.tx-amount.income { color: var(--text); }
 .tx-amount.transfer { color: var(--muted); }
 
 .form { display: flex; flex-direction: column; gap: 12px; }
@@ -188,3 +192,34 @@ form.inline { display: flex; gap: 8px; margin-top: 8px; }
 .review-top input[type='date'] { flex: 0 1 150px; }
 .segmented button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .button-link { display: inline-block; padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px; text-decoration: none; color: var(--text); background: var(--surface); }
+.tx-amount.saving { color: var(--muted); }
+label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
+label.check input { width: 18px; height: 18px; }
+.tag-input { display: flex; flex-direction: column; gap: 6px; }
+.tag-input input { color: var(--text); font-size: 15px; }
+.tag-suggest { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); }
+.chip.on { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+.tx-main .badges { margin-top: 4px; }
+
+/* 대시보드 */
+.kpis-4 { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 760px) { .kpis-4 { grid-template-columns: 1fr 1fr; } .kpis-4 .card:last-child { grid-column: auto; } }
+.swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.insights li.good::marker, .insights li { list-style: none; }
+.calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.calendar .dow { text-align: center; font-size: 11px; color: var(--muted); padding-bottom: 4px; }
+.calendar .cell { min-height: 46px; border-radius: 8px; padding: 4px; font-size: 11px; background: var(--hover); display: flex; flex-direction: column; justify-content: space-between; }
+.calendar .cell .d { color: var(--muted); }
+.calendar .cell .amt { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 11px; }
+.calendar .cell.nospend { background: var(--good-bg); }
+.calendar .cell.nospend .amt { font-weight: 500; color: var(--good); }
+.calendar .cell.future { background: none; border: 1px dashed var(--border); }
+.calendar .cell.today { outline: 2px solid var(--accent); }
+.calendar .cell.blank { background: none; }
+.scroll-x { overflow-x: auto; }
+table.annual { border-collapse: collapse; font-size: 12px; min-width: 900px; width: 100%; }
+table.annual th, table.annual td { padding: 6px 6px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.annual th:first-child, table.annual td:first-child { text-align: left; position: sticky; left: 0; background: var(--surface); }
+table.annual tr.total td { font-weight: 700; }
+table.annual td.zero { color: var(--muted); }
