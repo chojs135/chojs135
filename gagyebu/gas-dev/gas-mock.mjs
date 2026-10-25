@@ -154,7 +154,7 @@ class Sheet {
   }
 }
 
-export function createGas({ persistFile } = {}) {
+export function createGas({ persistFile, now } = {}) {
   const sheets = [Object.assign(new Sheet('우리집 가계부'), { data: [['ID', '날짜']] })]
   const props = {}
   if (persistFile && fs.existsSync(persistFile)) {
@@ -221,6 +221,21 @@ export function createGas({ persistFile } = {}) {
       }),
     },
   })
+  // 테스트는 "오늘"을 고정해서 날짜에 따라 결과가 바뀌지 않게 한다.
+  if (now) {
+    vm.runInContext(
+      `(() => {
+        const RealDate = Date
+        const fixed = new RealDate(${JSON.stringify(now)}).getTime()
+        class FixedDate extends RealDate {
+          constructor(...args) { if (args.length) super(...args); else super(fixed) }
+          static now() { return fixed }
+        }
+        globalThis.Date = FixedDate
+      })()`,
+      context,
+    )
+  }
   vm.runInContext(CODE, context, { filename: 'Code.js' })
   ScriptDate = vm.runInContext('Date', context)
   // 저장 파일에서 읽은 ISO 문자열을 스크립트 Date로 되살린다.

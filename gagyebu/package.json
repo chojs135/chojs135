@@ -5,7 +5,7 @@
     "install:all": "npm install && npm --prefix client install",
     "dev:gas": "node gas-dev/server.mjs",
     "dev:client": "npm --prefix client run dev",
-    "test": "node gas-dev/test.mjs",
+    "test": "node gas-dev/test.mjs && npm --prefix client test",
     "deploy": "node tools/deploy.mjs"
   },
   "devDependencies": {

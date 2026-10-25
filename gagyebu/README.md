@@ -27,7 +27,7 @@ API 키는 시트의 스크립트 속성에 있고, 구성원 확인을 통과�
 
 ```bash
 npm run install:all
-npm test              # gas/Code.js를 흉내 시트 위에서 검사
+npm test              # gas/Code.js(흉내 시트) + 파일 읽기(엑셀·한글·워드) 검사
 npm run dev:gas       # Apps Script 흉내 서버 (localhost:3002)
 npm run dev:client    # 화면 (localhost:5173, ?as=이메일 로 사용자 전환)
 npm run deploy        # 빌드 → clasp push → 웹 앱 배포 (주소 유지)
@@ -35,7 +35,8 @@ npm run deploy        # 빌드 → clasp push → 웹 앱 배포 (주소 유지)
 
 ## 주요 기능
 
-- AI 업로드 분석: PDF · JPG/PNG/WEBP(큰 사진은 자동 축소) · XLSX · CSV(EUC-KR 자동 인식), 여러 파일 한 번에
+- AI 업로드 분석: PDF · 사진(JPG/PNG/WEBP, 아이폰 HEIC는 JPG로 변환, 큰 사진은 자동 축소) · 엑셀(xlsx 직접 읽기, 은행 xls(HTML)·xls·ods·numbers) · 한글(hwp·hwpx) · 워드(docx) · CSV/TSV/HTML(EUC-KR 자동 인식), 여러 파일 한 번에
+  — PDF·사진은 Claude가 직접 읽고, 나머지는 브라우저에서 표 모양을 살린 글자로 꺼내 보냄(`client/src/fileText.ts`)
 - 검토 화면: 항목별 수정/제외, 중복 의심·확인 필요·규칙 적용 배지
 - 분류 학습: 분류를 고치면 가맹점 규칙으로 저장 → 다음 업로드부터 우선 적용
 - 저축(적금·청약·투자·대출원금)은 따로 세서 저축률 = 저축 ÷ 수입, 카드대금·내 계좌 이체는 `이체`로 통계에서 제외

@@ -2,7 +2,10 @@
 import assert from 'node:assert/strict'
 import { createGas } from './gas-mock.mjs'
 
-const gas = createGas()
+// 테스트 속 "오늘"
+const NOW = '2026-10-24T12:00:00+09:00'
+
+const gas = createGas({ now: NOW })
 const H = 'husband@gmail.com'
 const W = 'wife@gmail.com'
 const ok = (res) => {
@@ -289,7 +292,7 @@ gas.authState.missing = false
 
 // 10. 중복 찾기: 영수증 ↔ 카드 내역
 {
-  const g = createGas()
+  const g = createGas({ now: NOW })
   const U = 'u@gmail.com'
   ok(g.call(U, 'POST', '/setup', { name: '나', apiKey: 'sk-ant-test' }))
   const cs = ok(g.call(U, 'GET', '/categories'))
@@ -367,7 +370,7 @@ gas.authState.missing = false
 
 // 11. 이전 기본 분류를 쓰던 가계부 → 엑셀 기준 분류로 자동 이전
 {
-  const g = createGas()
+  const g = createGas({ now: NOW })
   const U = 'old@gmail.com'
   ok(g.call(U, 'POST', '/setup', { name: '민호' }))
   const sheet = (n) => g.sheets.find((x) => x.name === n)
@@ -440,7 +443,7 @@ gas.authState.missing = false
 
 // 12. 정기결제 (결제일 관리) — 오늘은 2026-10-24
 {
-  const g = createGas()
+  const g = createGas({ now: NOW })
   const U = 'r@gmail.com'
   ok(g.call(U, 'POST', '/setup', { name: '민호' }))
   const cs = ok(g.call(U, 'GET', '/categories'))
@@ -544,7 +547,7 @@ gas.authState.missing = false
 
 // 13. 관리 탭 (자산·예비비·대출·카드·통장·이벤트) — 오늘은 2026-10-24
 {
-  const g = createGas()
+  const g = createGas({ now: NOW })
   const U = 'm@gmail.com'
   ok(g.call(U, 'POST', '/setup', { name: '민호' }))
   const cs = ok(g.call(U, 'GET', '/categories'))

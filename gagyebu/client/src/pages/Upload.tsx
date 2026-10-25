@@ -186,7 +186,7 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
         onDrop={(e) => {
           e.preventDefault()
           setDrag(false)
-          setFiles([...files, ...Array.from(e.dataTransfer.files)])
+          setFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files)])
         }}
         onClick={() => inputRef.current?.click()}
       >
@@ -194,15 +194,15 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
         <p>
           <b>은행·카드 내역서, 영수증, 관리비 고지서</b>를 올려 주세요
         </p>
-        <p className="small muted">PDF · 사진/스크린샷(JPG, PNG) · 엑셀(XLSX) · CSV · 여러 개 한꺼번에 가능</p>
+        <p className="small muted">PDF · 사진/스크린샷 · 엑셀(xlsx·xls) · 한글(hwp·hwpx) · 워드(docx) · CSV · 여러 개 한꺼번에 가능</p>
         <input
           ref={inputRef}
           type="file"
           multiple
           hidden
-          accept=".pdf,.csv,.xlsx,.txt,image/jpeg,image/png,image/webp,image/gif"
+          accept=".pdf,.xlsx,.xls,.xlsm,.xlsb,.ods,.numbers,.csv,.tsv,.txt,.hwp,.hwpx,.docx,.html,.htm,.heic,.heif,image/*"
           onChange={(e) => {
-            setFiles([...files, ...Array.from(e.target.files ?? [])])
+            { const picked = Array.from(e.target.files ?? []); setFiles((prev) => [...prev, ...picked]) }
             e.target.value = ''
           }}
         />

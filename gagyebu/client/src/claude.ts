@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { fileToText, UnsupportedFileError } from './fileText'
 
 // Apps Script의 외부 요청은 60초에서 끊기므로 Claude는 브라우저에서 직접(스트리밍으로) 호출한다.
 // API 키는 구성원 확인을 거친 뒤 서버(시트의 스크립트 속성)에서 받아온다.
@@ -33,7 +34,7 @@ export type Extraction = {
 type Block = Anthropic.Beta.BetaContentBlockParam
 type ImageType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
-const EXCELJS_URL = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js'
+const HEIC2ANY_URL = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js'
 
 function toBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -57,54 +58,25 @@ async function shrinkImage(file: File): Promise<{ data: string; type: ImageType 
   return { data: await toBase64(blob), type: 'image/jpeg' }
 }
 
-// 국내 은행 CSV는 아직 EUC-KR(CP949)로 내려오는 경우가 많다.
-async function decodeText(file: File): Promise<string> {
-  const buf = await file.arrayBuffer()
-  const utf8 = new TextDecoder('utf-8').decode(buf)
-  return utf8.includes('�') ? new TextDecoder('euc-kr').decode(buf) : utf8
-}
-
-type ExcelJSGlobal = {
-  Workbook: new () => {
-    xlsx: { load(b: ArrayBuffer): Promise<unknown> }
-    eachSheet(cb: (s: { name: string; eachRow(cb: (row: { values: unknown[] }) => void): void }) => void): void
-  }
-}
-
-/** 엑셀 파싱 라이브러리는 커서 엑셀 파일을 올릴 때만 불러온다. */
-function loadExcelJS(): Promise<ExcelJSGlobal> {
-  const w = window as unknown as { ExcelJS?: ExcelJSGlobal }
-  if (w.ExcelJS) return Promise.resolve(w.ExcelJS)
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script')
-    s.src = EXCELJS_URL
-    s.onload = () => resolve(w.ExcelJS!)
-    s.onerror = () => reject(new Error('엑셀 읽기 도구를 불러오지 못했어요. CSV나 PDF로 올려 주세요.'))
-    document.head.appendChild(s)
-  })
-}
-
-async function xlsxToCsv(file: File): Promise<string> {
-  const ExcelJS = await loadExcelJS()
-  const wb = new ExcelJS.Workbook()
-  await wb.xlsx.load(await file.arrayBuffer())
-  const parts: string[] = []
-  wb.eachSheet((sheet) => {
-    parts.push(`### 시트: ${sheet.name}`)
-    sheet.eachRow((row) => {
-      const cells = row.values.slice(1).map((v) => {
-        if (v instanceof Date) return v.toISOString().slice(0, 10)
-        if (v && typeof v === 'object' && 'text' in v) return String((v as { text: unknown }).text)
-        if (v && typeof v === 'object' && 'result' in v) return String((v as { result: unknown }).result)
-        return v == null ? '' : String(v)
-      })
-      parts.push(cells.map((s) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s)).join(','))
+/** 아이폰 HEIC 사진은 API가 못 읽어서 JPEG로 바꾼다(변환 도구는 그때만 불러옴). */
+async function heicToJpeg(file: File): Promise<File> {
+  const w = window as unknown as { heic2any?: (o: { blob: Blob; toType: string; quality: number }) => Promise<Blob | Blob[]> }
+  if (!w.heic2any) {
+    await new Promise<void>((resolve, reject) => {
+      const s = document.createElement('script')
+      s.src = HEIC2ANY_URL
+      s.onload = () => resolve()
+      s.onerror = () => reject(new UnsupportedFileError(`${file.name}: HEIC 사진 변환 도구를 불러오지 못했어요. 스크린샷이나 JPG로 올려 주세요.`))
+      document.head.appendChild(s)
     })
-  })
-  return parts.join('\n')
+  }
+  const out = await w.heic2any!({ blob: file, toType: 'image/jpeg', quality: 0.85 })
+  const blob = Array.isArray(out) ? out[0] : out
+  return new File([blob], file.name.replace(/\.hei[cf]$/i, '.jpg'), { type: 'image/jpeg' })
 }
 
-async function fileToBlocks(file: File): Promise<Block[]> {
+async function fileToBlocks(original: File): Promise<Block[]> {
+  let file = original
   const label = `[파일: ${file.name}]`
   const name = file.name.toLowerCase()
   if (file.type === 'application/pdf' || name.endsWith('.pdf')) {
@@ -113,6 +85,7 @@ async function fileToBlocks(file: File): Promise<Block[]> {
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: await toBase64(file) } },
     ]
   }
+  if (/\.hei[cf]$/.test(name) || file.type === 'image/heic' || file.type === 'image/heif') file = await heicToJpeg(file)
   if (IMAGE_TYPES.includes(file.type)) {
     const img = await shrinkImage(file)
     return [
@@ -120,14 +93,10 @@ async function fileToBlocks(file: File): Promise<Block[]> {
       { type: 'image', source: { type: 'base64', media_type: img.type, data: img.data } },
     ]
   }
-  if (name.endsWith('.xlsx')) return [{ type: 'text', text: `${label}\n${await xlsxToCsv(file)}` }]
-  if (file.type.startsWith('text/') || name.endsWith('.csv') || name.endsWith('.txt')) {
-    return [{ type: 'text', text: `${label}\n${await decodeText(file)}` }]
-  }
-  if (name.endsWith('.heic') || name.endsWith('.heif')) {
-    throw new Error(`${file.name}: 아이폰 HEIC 사진은 지원하지 않아요. 스크린샷이나 JPG로 올려 주세요.`)
-  }
-  throw new Error(`지원하지 않는 파일 형식입니다: ${file.name} (PDF, JPG/PNG/WEBP, CSV, XLSX 가능)`)
+  // 엑셀·한글·워드·CSV 등은 브라우저에서 글자로 꺼내서 보낸다.
+  const text = await fileToText(file.name, file.type, await file.arrayBuffer())
+  if (text === null) throw new UnsupportedFileError(`${file.name}: 이 이미지 형식은 지원하지 않아요. JPG나 PNG로 올려 주세요.`)
+  return [{ type: 'text', text: `${label}\n${text}` }]
 }
 
 /** API 오류를 사람이 읽을 수 있는 말로 바꾼다. 원래 메시지도 함께 보여 줘야 원인을 찾기 쉽다. */

@@ -7,10 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --no-warnings test/fileText.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
+    "cfb": "^1.2.2",
+    "jszip": "^3.10.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "recharts": "^3.10.1"
