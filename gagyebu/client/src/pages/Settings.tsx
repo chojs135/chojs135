@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, TYPE_LABEL, type Category, type TxType } from '../api'
+import { api, TYPE_LABEL, type Category, type Member, type TxType } from '../api'
 import type { Ctx } from '../App'
 import { MODEL_INFO, testApiKey, type AnalysisContext } from '../claude'
 
@@ -186,6 +186,9 @@ function Members({ ctx }: { ctx: Ctx }) {
             <tr key={m.id}>
               <td>{m.name}</td>
               <td className="muted small">{m.email}</td>
+              <td>
+                <BankName member={m} onSaved={ctx.reloadMe} />
+              </td>
             </tr>
           ))}
         </tbody>
@@ -199,7 +202,32 @@ function Members({ ctx }: { ctx: Ctx }) {
         <button>추가</button>
       </form>
       {msg && <p className="small">{msg}</p>}
+      <p className="small muted">
+        <b>통장 이름</b>: 통장 내역에 찍히는 실명(예: 조진수, 이솔아)을 적어 두면 부부끼리 주고받은 이체는 지출로 잡지 않고 빼요.
+      </p>
     </section>
+  )
+}
+
+function BankName({ member, onSaved }: { member: Member; onSaved: () => void }) {
+  const [value, setValue] = useState(member.bank_name ?? '')
+  const [state, setState] = useState('')
+  async function save() {
+    if (value.trim() === (member.bank_name ?? '')) return
+    setState('…')
+    try {
+      await api(`/members/${member.id}`, { method: 'PUT', body: { bank_name: value } })
+      setState('✓')
+      onSaved()
+    } catch (err) {
+      setState((err as Error).message)
+    }
+  }
+  return (
+    <span className="inline">
+      <input value={value} onChange={(e) => setValue(e.target.value)} onBlur={save} placeholder="통장 이름" style={{ width: 90 }} aria-label={`${member.name} 통장 이름`} />
+      {state && <span className="small muted">{state}</span>}
+    </span>
   )
 }
 

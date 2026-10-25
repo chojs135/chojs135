@@ -72,6 +72,7 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
     const otherMonth = months.some((m) => m !== ctx.month)
     const dupStrong = result.items.filter((i) => i.duplicate?.level === 'strong').length
     const dupWeak = result.items.filter((i) => i.duplicate?.level === 'weak').length
+    const skipped = result.items.filter((i) => i.skip).length
     return (
       <div>
         <div className="card">
@@ -83,6 +84,9 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
               {dates.length > 1 && dates.at(-1) !== dates[0] ? ` ~ ${dates.at(-1)}` : ''}
               {otherMonth && ` — ${months.map((m) => `${Number(m.slice(5))}월`).join(', ')} 내역으로 저장돼요. 날짜가 틀리면 아래에서 고쳐 주세요.`}
             </p>
+          )}
+          {skipped > 0 && (
+            <p className="notice">🚫 부부끼리 주고받은 이체·통장에서 나간 카드대금 {skipped}건은 지출로 두 번 잡히지 않게 빼 두었어요. 필요하면 체크해서 저장하세요.</p>
           )}
           {(dupStrong > 0 || dupWeak > 0) && (
             <p className="notice">
@@ -131,6 +135,7 @@ export default function Upload({ ctx, onSaved }: { ctx: Ctx; onSaved: (months: s
                   {it.description}
                   {it.payment_method && ` · ${it.payment_method}`}
                 </div>
+                {it.skip && <div className="dup strong">🚫 제외 — {it.skip}</div>}
                 {it.duplicate && (
                   <div className={`dup ${it.duplicate.level}`}>
                     {it.duplicate.level === 'strong' ? '🔁 중복이라 뺐어요' : '🤔 혹시 중복?'} — {it.duplicate.reason}

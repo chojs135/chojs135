@@ -19,7 +19,8 @@ var SHEETS = {
   cat: { name: '카테고리', headers: ['ID', '구분', '이름', '아이콘', '색', '세부항목', '순서'] },
   budget: { name: '예산', headers: ['카테고리', '월 예산'] },
   rule: { name: '자동분류규칙', headers: ['키워드', '구분', '카테고리', '세부항목', '수정일시'] },
-  member: { name: '구성원', headers: ['ID', '이메일', '이름', '추가일시'] },
+  // 통장 이름: 은행 내역에 찍히는 실명(예: 조진수). 부부끼리 이체를 알아보는 데 쓴다.
+  member: { name: '구성원', headers: ['ID', '이메일', '이름', '추가일시', '통장 이름'] },
   upload: { name: '업로드기록', headers: ['ID', '일시', '파일', '문서종류', '요약', '올린사람', '저장건수'] },
   recurring: {
     name: '결제일 관리',
@@ -397,7 +398,7 @@ function currentEmail_() {
 
 function members_() {
   return read_('member').map(function (m) {
-    return { id: Number(m.ID), email: String(m['이메일']).toLowerCase(), name: String(m['이름']) };
+    return { id: Number(m.ID), email: String(m['이메일']).toLowerCase(), name: String(m['이름']), bank_name: String(m['통장 이름'] || '').trim(), _row: m._row };
   });
 }
 
@@ -736,6 +737,8 @@ function route_(method, path, body) {
 
     case 'POST /members':
       return withLock_(function () { return addMember_(body); });
+    case 'PUT /members':
+      return withLock_(function () { return updateMember_(Number(id), body); });
     case 'PUT /settings':
       return saveSettings_(body);
     case 'GET /reports':
@@ -760,7 +763,7 @@ function me_() {
     state: 'ok',
     user: { id: me.id, name: me.name, email: me.email },
     household: { name: p.getProperty('HOUSEHOLD_NAME') || '우리집 가계부' },
-    members: members.map(function (m) { return { id: m.id, name: m.name, email: m.email }; }),
+    members: members.map(function (m) { return { id: m.id, name: m.name, email: m.email, bank_name: m.bank_name }; }),
     hasApiKey: !!p.getProperty('ANTHROPIC_API_KEY'),
     apiKeyHint: keyHint_(p.getProperty('ANTHROPIC_API_KEY')),
     model: currentModel_(),
@@ -816,6 +819,13 @@ function currentModel_() {
 
 function cleanKey_(k) {
   return String(k || '').replace(/[\s"'`]/g, '');
+}
+
+function updateMember_(id, body) {
+  var m = members_().filter(function (x) { return x.id === id; })[0];
+  if (!m) throw httpError_(404, '구성원을 찾을 수 없어요.');
+  sheet_('member').getRange(m._row, SHEETS.member.headers.indexOf('통장 이름') + 1).setValue(String(body.bank_name || '').trim());
+  return true;
 }
 
 function saveSettings_(body) {
@@ -991,7 +1001,7 @@ function analysisContext_() {
   return {
     apiKey: apiKey,
     model: currentModel_(),
-    system: systemPrompt_(cats, rules_()),
+    system: systemPrompt_(cats, rules_(), members_()),
     schema: {
       type: 'object',
       additionalProperties: false,
@@ -1026,7 +1036,7 @@ function analysisContext_() {
   };
 }
 
-function systemPrompt_(cats, rules) {
+function systemPrompt_(cats, rules, members) {
   function list(type) {
     return cats
       .filter(function (c) { return c.type === type; })
@@ -1069,6 +1079,8 @@ function systemPrompt_(cats, rules) {
     '- 영수증: 결제 1건을 하나의 거래로 기록합니다. 품목이 여러 카테고리에 걸쳐 크게 나뉘면(예: 마트에서 식료품과 가전) 나눠도 됩니다.',
     '- 급여명세서: 실수령액을 급여 수입 1건으로 기록합니다.',
     '- 여러 파일을 함께 올렸을 때 같은 결제가 두 곳에 나오면(예: 영수증 사진과 카드 이용내역) 한 번만 기록하고, 날짜·결제수단은 카드/은행 내역을 따릅니다.',
+    '- 이 가계부는 부부가 함께 씁니다. 부부의 이름은 ' + coupleNames_(members).join(', ') + '입니다. 이 사람들끼리 주고받은 계좌이체(보낸 사람·받는 사람·적요에 이 이름이 있는 이체)는 수입도 지출도 아니므로 transfer, 소분류 "내 계좌 이체"로 기록하세요.',
+    '- 통장 내역에 나오는 신용카드 대금 출금(예: "삼성카드", "신한카드 결제", "KB카드대금")은 카드 내역에서 이미 지출로 잡히므로 transfer, 소분류 "카드대금"으로 기록하세요.',
     '',
     '## 형식',
     '- date는 YYYY-MM-DD. 연도가 없으면 문서의 다른 날짜나 오늘(' + today + ')을 기준으로 가장 그럴듯한 연도를 고릅니다.',
@@ -1121,6 +1133,7 @@ function prepareUpload_(body) {
       member_id: memberId,
       fixed: !!t.fixed,
       tags: [],
+      skip: null,
       memo: '',
       confidence: Number(t.confidence) || 0,
       note: t.note || '',
@@ -1132,6 +1145,7 @@ function prepareUpload_(body) {
       include: true,
     };
   });
+  applySkipRules_(items, members_(), cats);
   markDuplicates_(items, existing);
   return { document_type: ex.document_type || '', summary: ex.summary || '', items: items };
 }
@@ -1173,18 +1187,67 @@ function describeTx_(t) {
   return t.date + ' ' + (t.merchant || t.description || '') + ' ' + t.amount.toLocaleString('ko-KR') + '원' + (t.created_by_name ? ' (' + t.created_by_name + ' 입력)' : '');
 }
 
+// ---------------------------------------------------------------- 자동 제외 규칙
+// 통장 내역을 올릴 때 가계부에 넣으면 안 되는 줄: 부부끼리 이체, 카드대금 출금(카드 내역과 이중 집계).
+
+var CARD_COMPANY_RE = /^(KB|kb)?\s*(국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|농협|NH|씨티|IBK|기업|카카오뱅크|토스|케이뱅크)?\s*카드$/;
+
+function coupleNames_(members) {
+  var names = [];
+  members.forEach(function (m) {
+    [m.bank_name, m.name].forEach(function (n) {
+      n = String(n || '').trim();
+      if (n.length >= 2 && names.indexOf(n) < 0) names.push(n);
+    });
+  });
+  return names;
+}
+
+function isCardPayment_(it) {
+  var text = (it.merchant + ' ' + it.description).replace(/\s+/g, ' ');
+  if (it.type === 'income') return false;
+  if (it.type === 'transfer' && it.subcategory === '카드대금') return true;
+  if (/연회비|수수료|캐시백|포인트/.test(text)) return false;
+  if (/카드\s*(대금|결제대금|결제|자동이체|출금)/.test(text)) return true;
+  return CARD_COMPANY_RE.test(String(it.merchant).trim()) && (!it.payment_method || /은행|통장|계좌|입출금/.test(it.payment_method));
+}
+
+function applySkipRules_(items, members, cats) {
+  var names = coupleNames_(members);
+  var transferCat = cats.filter(function (c) { return c.type === 'transfer'; })[0] || null;
+  var toTransfer = function (it, sub) {
+    it.type = 'transfer';
+    it.category_id = transferCat ? transferCat.id : null;
+    it.subcategory = transferCat && transferCat.subcategories.indexOf(sub) >= 0 ? sub : '';
+    it.fixed = false;
+  };
+  items.forEach(function (it) {
+    var text = it.merchant + ' ' + it.description;
+    var who = names.filter(function (n) { return text.indexOf(n) >= 0; });
+    if (who.length) {
+      toTransfer(it, '내 계좌 이체');
+      it.skip = '부부 간 이체(' + who.join(', ') + ')라 가계부에서 뺐어요.';
+    } else if (isCardPayment_(it)) {
+      toTransfer(it, '카드대금');
+      it.skip = '통장에서 나간 카드대금이라 뺐어요. 카드 내역으로 이미 지출이 잡혀요.';
+    }
+  });
+}
+
 function markDuplicates_(items, existing) {
   var used = {};
 
   // 1) 기존 내역과 1:1 비교
   items.forEach(function (it) {
+    if (it.skip) return;
     var best = null;
     existing.forEach(function (t) {
       if (used[t.id] || t.type !== it.type || t.amount !== it.amount) return;
       var gap = Math.abs(dayNum_(t.date) - dayNum_(it.date));
       if (gap > DUP_DAYS) return;
       var same = similarMerchant_(t.merchant, it.merchant);
-      var level = same || (gap === 0 && it.amount >= 10000) ? 'strong' : 'weak';
+      // 같은 날짜·같은 금액이면 중복으로 본다(가맹점 표기가 달라도). 며칠 차이는 가맹점이 비슷할 때만.
+      var level = gap === 0 || same ? 'strong' : 'weak';
       var score = (level === 'strong' ? 0 : 10) + gap;
       if (!best || score < best.score) best = { t: t, level: level, score: score, gap: gap };
     });
@@ -1236,17 +1299,23 @@ function markDuplicates_(items, existing) {
 
   // 4) 같이 올린 파일끼리 겹침 (AI가 한 번만 쓰라는 지시를 놓친 경우)
   items.forEach(function (it, i) {
-    if (it.duplicate) return;
+    if (it.duplicate || it.skip) return;
     for (var j = 0; j < i; j++) {
       var o = items[j];
-      if (o.type !== it.type || o.amount !== it.amount || !it.source_file || o.source_file === it.source_file) continue;
-      if (Math.abs(dayNum_(o.date) - dayNum_(it.date)) > DUP_DAYS) continue;
-      it.duplicate = { level: 'strong', of_id: null, reason: '같이 올린 ' + o.source_file + '에 같은 결제가 있어요 (' + (o.merchant || o.date) + ').' };
-      return;
+      if (o.skip || o.type !== it.type || o.amount !== it.amount) continue;
+      var gap = Math.abs(dayNum_(o.date) - dayNum_(it.date));
+      if (gap === 0) {
+        it.duplicate = { level: 'strong', of_id: null, reason: '같은 날짜·같은 금액이 위에 이미 있어요 (' + (o.merchant || o.date) + '). 실제로 두 번 결제했다면 체크하세요.' };
+        return;
+      }
+      if (gap <= DUP_DAYS && it.source_file && o.source_file && o.source_file !== it.source_file) {
+        it.duplicate = { level: 'strong', of_id: null, reason: '같이 올린 ' + o.source_file + '에 같은 결제가 있어요 (' + (o.merchant || o.date) + ').' };
+        return;
+      }
     }
   });
 
-  items.forEach(function (it) { it.include = !(it.duplicate && it.duplicate.level === 'strong'); });
+  items.forEach(function (it) { it.include = !it.skip && !(it.duplicate && it.duplicate.level === 'strong'); });
 }
 
 function fillFromSkipped_(skipped) {

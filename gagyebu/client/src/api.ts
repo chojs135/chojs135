@@ -10,7 +10,7 @@ export type Category = {
   sort: number
 }
 
-export type Member = { id: number; name: string; email: string }
+export type Member = { id: number; name: string; email: string; bank_name: string }
 
 export type MeResponse =
   | { state: 'setup' | 'not_member'; email: string; sheetUrl: string }
@@ -50,6 +50,8 @@ export type DraftItem = Tx & {
   note: string
   /** strong: 확실한 중복(기본 제외), weak: 비슷한 내역 있음(포함, 표시만) */
   duplicate: { level: 'strong' | 'weak'; of_id: number | null; reason: string } | null
+  /** 부부 간 이체·통장 카드대금처럼 가계부에서 빼는 이유 */
+  skip: string | null
   source_file: string
   rule_applied: boolean
   ai_category_id: number | null

@@ -337,14 +337,20 @@ gas.authState.missing = false
   assert.equal(emart.length, 1)
   assert.equal(emart[0].payment_method, '삼성카드')
 
-  // 같은 결제가 1:1로만 짝지어진다: 같은 날 같은 금액 두 번 결제했는데 하나만 기록돼 있었으면 하나는 새 결제
+  // 같은 날짜·같은 금액은 중복으로 뺀다(아내 요청). 기존 내역과 1:1로 짝짓고, 같은 업로드 안에서도 뺀다.
   ok(g.call(U, 'POST', '/transactions', { date: '2026-09-01', type: 'expense', amount: 12000, category_id: food, merchant: '편의점' }))
   const twice = prep([
     tx({ date: '2026-09-01', amount: 12000, merchant: '편의점' }),
     tx({ date: '2026-09-01', amount: 12000, merchant: '편의점' }),
   ])
   assert.equal(twice[0].duplicate.level, 'strong')
-  assert.equal(twice[1].duplicate, null)
+  assert.equal(twice[0].duplicate.of_id > 0, true, '기존 내역과 짝')
+  assert.equal(twice[1].duplicate.level, 'strong', '같은 업로드 안의 같은 날짜·금액')
+  assert.ok(twice[1].duplicate.reason.includes('같은 날짜·같은 금액'))
+  assert.ok(twice.every((i) => !i.include))
+  // 같은 날 같은 금액이면 가맹점 표기가 달라도 중복
+  ok(g.call(U, 'POST', '/transactions', { date: '2026-09-02', type: 'expense', amount: 4500, category_id: food, merchant: '스타벅스 해운대점' }))
+  assert.equal(prep([tx({ date: '2026-09-02', amount: 4500, merchant: 'STARBUCKS KOREA' })])[0].duplicate.level, 'strong')
 
   // 반대 순서: 카드 내역(합계 한 줄)을 먼저, 고지서(항목별)를 나중에
   ok(g.call(U, 'POST', '/transactions', { date: '2026-09-26', type: 'expense', amount: 300000, category_id: house, merchant: '아파트관리비 카드결제' }))
@@ -606,6 +612,53 @@ gas.authState.missing = false
   const evTab = g.sheets.find((x) => x.name === '이벤트 관리')
   assert.equal(evTab.data[1][1], '알뜰폰 개통 이벤트')
   fail(g.call(U, 'GET', '/ledgers/nope'), 404)
+}
+
+// 14. 통장 내역: 부부 간 이체·카드대금은 자동으로 뺀다
+{
+  const g = createGas({ now: NOW })
+  const H2 = 'jinsu@gmail.com'
+  ok(g.call(H2, 'POST', '/setup', { name: '진수', apiKey: 'sk-ant-test' }))
+  ok(g.call(H2, 'POST', '/members', { name: '솔아', email: 'sola@gmail.com' }))
+  const mem = ok(g.call(H2, 'GET', '/me')).members
+  ok(g.call(H2, 'PUT', `/members/${mem[0].id}`, { bank_name: '조진수' }))
+  ok(g.call(H2, 'PUT', `/members/${mem[1].id}`, { bank_name: ' 이솔아 ' }))
+  assert.deepEqual(ok(g.call(H2, 'GET', '/me')).members.map((m) => m.bank_name), ['조진수', '이솔아'])
+  const sys = ok(g.call(H2, 'GET', '/analysis-context')).system
+  assert.ok(sys.includes('부부의 이름은 조진수, 진수, 이솔아, 솔아입니다'))
+  assert.ok(sys.includes('카드대금'))
+  const tx = (o) => ({ type: 'expense', category: '식비', subcategory: '', description: '', payment_method: '국민은행 입출금', fixed: false, confidence: 0.9, note: '', source_file: '통장.xlsx', ...o })
+  const items = ok(g.call(H2, 'POST', '/uploads/prepare', { extraction: { document_type: '통장 거래내역', summary: '', transactions: [
+    tx({ date: '2026-10-01', amount: 500000, merchant: '이솔아', description: '생활비', type: 'expense' }),
+    tx({ date: '2026-10-02', amount: 300000, merchant: '조진수', description: '이체', type: 'income', category: '수입' }),
+    tx({ date: '2026-10-15', amount: 1200000, merchant: '삼성카드', description: '', type: 'expense' }),
+    tx({ date: '2026-10-15', amount: 800000, merchant: 'KB국민카드', description: '카드대금 출금', type: 'transfer', category: '이체', subcategory: '카드대금' }),
+    tx({ date: '2026-10-16', amount: 450000, merchant: '신한카드 결제대금', type: 'expense' }),
+    tx({ date: '2026-10-20', amount: 15000, merchant: '삼성카드 연회비', type: 'expense' }),
+    tx({ date: '2026-10-21', amount: 89000, merchant: 'SKT', type: 'expense', category: '고정지출', subcategory: '통신비' }),
+    tx({ date: '2026-10-25', amount: 3500000, merchant: '(주)회사 급여', type: 'income', category: '수입', subcategory: '월급' }),
+  ] } })).items
+  const r = (m) => items.find((i) => i.merchant === m)
+  for (const m of ['이솔아', '조진수']) {
+    assert.equal(r(m).type, 'transfer')
+    assert.equal(r(m).subcategory, '내 계좌 이체')
+    assert.equal(r(m).include, false)
+    assert.ok(r(m).skip.includes('부부 간 이체'))
+  }
+  for (const m of ['삼성카드', 'KB국민카드', '신한카드 결제대금']) {
+    assert.equal(r(m).include, false, m)
+    assert.equal(r(m).subcategory, '카드대금')
+    assert.ok(r(m).skip.includes('카드대금'))
+  }
+  assert.equal(r('삼성카드 연회비').include, true, '연회비는 진짜 지출')
+  assert.equal(r('삼성카드 연회비').skip, null)
+  assert.equal(r('SKT').include, true)
+  assert.equal(r('(주)회사 급여').include, true)
+  // 뺀 줄은 저장되지 않는다
+  const saved = ok(g.call(H2, 'POST', '/uploads/commit', { items, filenames: ['통장.xlsx'] }))
+  assert.equal(saved.saved, 3)
+  // 구성원 탭에 통장 이름 열
+  assert.deepEqual(g.sheets.find((x) => x.name === '구성원').data[0], ['ID', '이메일', '이름', '추가일시', '통장 이름'])
 }
 
 console.log('✅ gas/Code.js 테스트 모두 통과')
