@@ -1,0 +1,157 @@
+<!-- 5. 위험 체크·대체식 추천 -->
+<script>
+/* 대체식 후보: [이름, 그 대체식에 들어 있을 수 있는 알레르기 번호]
+   메뉴 이름에 맞는 규칙을 먼저 쓰고, 없으면 알레르기 번호별 기본 후보를 쓴다. */
+const SUB_RULES = [
+  [/우유|밀크/, [['두유', [5]], ['쌀음료', []], ['제철 과일', []]]],
+  [/요구르트|요거트/, [['두유 요거트', [5]], ['제철 과일', []]]],
+  [/치즈/, [['치즈 빼고 별도 배식', []]]],
+  [/크림/, [['토마토소스로 별도 조리', [12]], ['오일소스로 별도 조리', []]]],
+  [/계란|달걀|에그|오믈렛|스크램블/, [['두부찜', [5]], ['애호박볶음', []], ['감자채볶음', []]]],
+  [/전$|부침|튀김|까스|가스|동그랑땡/, [['쌀가루 반죽으로 별도 조리', []], ['감자전분 튀김옷', []], ['같은 재료 구이', []]]],
+  [/빵|토스트|케이크|머핀|쿠키|와플|피자/, [['떡', []], ['찐 고구마', []], ['쌀강정', []]]],
+  [/국수|스파게티|파스타|우동|라면|짜장|짬뽕|수제비/, [['쌀국수', []], ['쌀밥으로 대체', []]]],
+  [/새우/, [['닭가슴살', [15]], ['두부', [5]], ['버섯', []]]],
+  [/게살|꽃게|크래미|오징어|조개|바지락|홍합|굴|전복/, [['버섯', []], ['두부', [5]], ['닭고기', [15]]]],
+  [/돼지|돈육|제육|삼겹|햄|소시지|베이컨|탕수육|돈까스|돈가스/, [['닭고기', [15]], ['쇠고기', [16]], ['두부', [5]]]],
+  [/닭|치킨|계육/, [['돼지고기', [10]], ['쇠고기', [16]], ['두부', [5]]]],
+  [/소고기|쇠고기|우육|불고기|장조림/, [['돼지고기', [10]], ['닭고기', [15]], ['버섯', []]]],
+  [/고등어/, [['동태구이', []], ['닭고기', [15]]]],
+  [/땅콩|호두|잣|견과/, [['견과 빼고 별도 배식', []], ['해바라기씨', []], ['호박씨', []]]],
+  [/복숭아/, [['사과', []], ['배', []], ['귤', []]]],
+  [/토마토|케첩|케찹/, [['간장소스', [5, 6]], ['오일소스', []]]],
+  [/메밀/, [['쌀국수', []]]],
+  [/김치|깍두기|겉절이|섞박지/, [['백김치(젓갈 없이)', []], ['오이무침', []], ['무생채(젓갈 없이)', []]]],
+];
+const SUB_BY_ALLERGEN = {
+  1: [['두부요리', [5]], ['애호박볶음', []]], 2: [['두유', [5]], ['쌀음료', []]], 3: [['쌀국수', []]],
+  4: [['견과 빼고 별도 배식', []]], 5: [['소금간으로 별도 조리', []]], 6: [['쌀가루로 별도 조리', []], ['쌀밥으로 대체', []]],
+  7: [['동태구이', []]], 8: [['버섯볶음', []]], 9: [['닭가슴살', [15]]], 10: [['닭고기', [15]]],
+  11: [['다른 제철 과일', []]], 12: [['오일소스', []]], 13: [['생과일', []]], 14: [['견과 빼고 별도 배식', []]],
+  15: [['돼지고기', [10]]], 16: [['닭고기', [15]]], 17: [['버섯', []]], 18: [['버섯', []]], 19: [['견과 빼고 별도 배식', []]],
+};
+const SUB_ALWAYS = [['해당 메뉴 제외(밥·반찬 추가 배식)', []], ['가정 도시락 지참 안내', []]];
+const KNOWN_SUB = {};
+[...SUB_RULES.flatMap(r => r[1]), ...Object.values(SUB_BY_ALLERGEN).flat(), ...SUB_ALWAYS]
+  .forEach(([n, a]) => { KNOWN_SUB[n] = a; });
+
+function suggestSubs(menuName, hitAllergens) {
+  let list = [];
+  SUB_RULES.forEach(([re, cands]) => { if (re.test(menuName)) list.push(...cands); });
+  if (!list.length) hitAllergens.forEach(a => list.push(...(SUB_BY_ALLERGEN[a] || [])));
+  list.push(...SUB_ALWAYS);
+  const seen = new Set();
+  return list.filter(([n]) => !seen.has(n) && seen.add(n));
+}
+/** 대체식 이름에 들어 있을 수 있는 알레르기 번호 (사전 + 이름 추정) */
+function subAllergens(name) {
+  return [...new Set([...(KNOWN_SUB[name] || []), ...guessAllergens(name)])];
+}
+
+/* ---- 3-1. 위험 체크·대체식 ---- */
+function renderPlan() {
+  const { meals, plans } = state.admin;
+  const date = state.planDate;
+  const meal = meals.find(m => m.date === date);
+  const studs = approved();
+  const risks = risksFor(studs, meal);
+  if (state.draftDate !== date || !state.draft) { state.draft = planMap(plans, date); state.draftDate = date; }
+  const draft = state.draft;
+
+  const week = weekDates(date);
+  const weekHTML = week.map(d => {
+    const m = meals.find(x => x.date === d);
+    const rs = m ? risksFor(studs, m) : null;
+    const pm = planMap(plans, d);
+    const undecided = rs ? rs.reduce((n, r) => n + r.items.filter(it => !pm[planKey(it.menu, r.student.id)]).length, 0) : 0;
+    return `<button data-date="${d}" class="${d === date ? 'on' : ''}"><small>${fmtDate(d)}</small>
+      <b class="${rs && rs.length ? 'some' : 'zero'}">${rs ? rs.length + '명' : '–'}</b>
+      <small>${!rs ? '식단 미등록' : undecided ? `미정 ${undecided}건` : rs.length ? '대체식 완료 ✓' : '주의 없음'}</small></button>`;
+  }).join('');
+
+  // 메뉴별로 해당 학생 묶기
+  const byMenu = {};
+  risks.forEach(r => r.items.forEach(it => {
+    (byMenu[it.menu] = byMenu[it.menu] || []).push({ st: r.student, hits: it.hits });
+  }));
+
+  const cards = Object.entries(byMenu).map(([menu, list], mi) => {
+    const hitsAll = [...new Set(list.flatMap(x => x.hits))].sort((a, b) => a - b);
+    const cands = suggestSubs(menu, hitsAll).map(([name]) => {
+      const unsafe = list.filter(x => subAllergens(name).some(a => x.st.allergens.includes(a)));
+      return { name, unsafe };
+    });
+    const dl = `dl-${mi}`;
+    return `<div class="menu-card">
+      <h3>${esc(menu)} <span class="muted" style="font-weight:400;font-size:14px">· 주의 학생 ${list.length}명</span></h3>
+      <div>${chips(hitsAll, hitsAll)}</div>
+      <div class="muted" style="font-size:13px;margin-top:8px">추천 대체식 (누르면 안전한 학생 모두에게 적용)</div>
+      <div class="cands">${cands.map(c => `<button class="cand ${c.unsafe.length ? 'partial' : 'safe'}" data-menu="${esc(menu)}" data-sub="${esc(c.name)}">
+        ${esc(c.name)} <small>${c.unsafe.length ? `⚠ ${c.unsafe.map(x => esc(x.st.name)).join(', ')} 불가` : '✓ 모두 안전'}</small></button>`).join('')}</div>
+      <datalist id="${dl}">${cands.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
+      ${list.map(({ st, hits }) => {
+        const v = draft[planKey(menu, st.id)] || '';
+        const clash = v ? subAllergens(v).filter(a => st.allergens.includes(a)) : [];
+        return `<div class="pick">
+          <div><b>${stuLabel(st)}</b>${sevBadges(st)}<br>${chips(st.allergens, hits)}</div>
+          <div><input type="text" list="${dl}" placeholder="대체식 입력 또는 선택" value="${esc(v)}"
+                 data-menu="${esc(menu)}" data-sid="${st.id}">
+            ${clash.length ? `<div class="warnline">⚠ 이 대체식에 ${clash.map(a => ALLERGENS[a]).join(', ')}이(가) 들어 있을 수 있어요</div>` : ''}</div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+
+  const qty = {};
+  Object.entries(draft).forEach(([k, v]) => {
+    const [menu, sid] = k.split('||');
+    if (v && risks.some(r => r.student.id === sid && r.items.some(i => i.menu === menu))) qty[v] = (qty[v] || 0) + 1;
+  });
+
+  $('#admin-content').innerHTML = `
+    <div class="card no-print"><div class="row">
+      <label class="f" style="margin:0">날짜</label>
+      <input type="date" id="plan-date" value="${date}" style="max-width:180px">
+      <button class="btn" data-nav="-7">◀ 지난주</button><button class="btn" data-nav="7">다음주 ▶</button>
+    </div></div>
+    <div class="week">${weekHTML}</div>
+    <h2 style="margin:0 0 10px">${fmtDate(date)} 위험 체크</h2>
+    ${!meal ? `<div class="card">이 날짜의 식단이 없습니다.
+      ${(() => { const n = nearestMealDate(meals.map(m => m.date), date);
+        return n && n !== date ? `<button class="btn sm primary" onclick="state.planDate='${n}';renderPlan()">식단이 있는 날로 이동: ${fmtDate(n)}</button>` : ''; })()}
+      <button class="btn sm" onclick="state.sub='meal';state.mealDate='${date}';renderAdmin()">식단 입력하러 가기</button></div>`
+      : !risks.length ? '<div class="card ok">등록된 학생 중 이 날 위험 메뉴가 있는 학생이 없습니다. 🙂</div>'
+      : cards + `
+      <div class="card"><h3>대체식 준비 수량</h3>${Object.keys(qty).length ? Object.entries(qty).map(([k, v]) =>
+        `<span class="chip" style="font-size:15px">${esc(k)} <b>${v}</b></span>`).join(' ') : '<span class="muted">아직 정한 대체식이 없습니다.</span>'}
+        <div class="row" style="margin-top:12px"><button class="btn primary" id="save-plan">저장하고 선생님들께 공유</button>
+        <button class="btn" onclick="window.print()">인쇄</button></div>
+        <p class="note">대체식 추천은 일반적인 식재료 기준입니다. 실제 사용하는 제품의 원재료 표시와 교차오염 가능성은 영양교사가 최종 확인해 주세요.</p>
+      </div>`}`;
+
+  const c = $('#admin-content');
+  c.querySelectorAll('.week button').forEach(b => b.onclick = () => { state.planDate = b.dataset.date; renderPlan(); });
+  c.querySelectorAll('[data-nav]').forEach(b => b.onclick = () => { state.planDate = addDays(state.planDate, +b.dataset.nav); renderPlan(); });
+  $('#plan-date').onchange = e => { if (e.target.value) { state.planDate = e.target.value; renderPlan(); } };
+  c.querySelectorAll('.cand').forEach(b => b.onclick = () => {
+    const menu = b.dataset.menu, sub = b.dataset.sub;
+    byMenu[menu].forEach(({ st }) => {
+      if (!subAllergens(sub).some(a => st.allergens.includes(a))) draft[planKey(menu, st.id)] = sub;
+    });
+    renderPlan();
+  });
+  c.querySelectorAll('input[data-sid]').forEach(inp => inp.onchange = () => {
+    draft[planKey(inp.dataset.menu, inp.dataset.sid)] = inp.value.trim();
+    renderPlan();
+  });
+  const sb = $('#save-plan');
+  if (sb) sb.onclick = () => {
+    const list = [];
+    risks.forEach(r => r.items.forEach(it => {
+      const v = draft[planKey(it.menu, r.student.id)];
+      if (v) list.push({ menu: it.menu, studentId: r.student.id, substitute: v });
+    }));
+    adminSave('savePlans', [date, list], '대체식이 저장되어 선생님 공유 화면에 반영되었습니다.');
+  };
+}
+</script>

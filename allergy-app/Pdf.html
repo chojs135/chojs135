@@ -1,0 +1,286 @@
+<!-- 6. 식단표 PDF 올리기 -->
+<script>
+/* ---- 3-2-1. 식단표 PDF 읽기 ----
+   PDF 안의 글자와 위치를 읽어서, 요일 머리글(월·화·수…)로 칸을 나누고
+   칸 안의 날짜 숫자 아래에 있는 줄들을 그 날의 메뉴로 본다. 달력형·주간형 식단표 모두 처리. */
+const PDFJS_BASE = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/';
+let pdfjsLoading = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  return pdfjsLoading || (pdfjsLoading = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = PDFJS_BASE + 'build/pdf.min.js';
+    s.onload = () => { pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'build/pdf.worker.min.js'; res(pdfjsLib); };
+    s.onerror = () => { pdfjsLoading = null; rej(new Error('PDF 읽기 도구를 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.')); };
+    document.head.appendChild(s);
+  }));
+}
+
+const PDF_HEADER = /^\(?\s*([월화수목금토일])\s*\)?(요일)?$/;
+const PDF_MARK_MD = /^(\d{1,2})\s*[\/.월]\s*(\d{1,2})\s*일?\s*(?:\(?\s*([월화수목금토일])(?:요일)?\s*\)?)?$/;
+const PDF_MARK_D = /^(\d{1,2})\s*일?\s*(?:\(?\s*([월화수목금토일])(?:요일)?\s*\)?)?$/;
+const PDF_SKIP = /kcal|칼로리|열량|단백질|탄수화물|지방|칼슘|철분|비타민|나트륨|원산지|식단표|유발식품|영양소|^[중석조]식$|[:：]/i;
+const PDF_HOLIDAY = /휴업|재량|기념일|방학|공휴일|휴일|급식\s*없음|미실시|단축/;
+
+function pdfMarker(text) {
+  const t = text.replace(/\s+/g, ' ').trim();
+  let m = t.match(PDF_MARK_MD);
+  if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31) return { m: +m[1], d: +m[2], dow: m[3] || null };
+  m = t.match(PDF_MARK_D);
+  if (m && +m[1] >= 1 && +m[1] <= 31) return { m: null, d: +m[1], dow: m[2] || null };
+  return null;
+}
+
+/** 같은 높이(y)에 있는 글자 조각을 한 줄로 합친다. 위에서 아래 순서. */
+function pdfLines(items) {
+  const lines = [];
+  items.slice().sort((a, b) => b.y - a.y || a.x - b.x).forEach(it => {
+    const L = lines.find(l => Math.abs(l.y - it.y) <= Math.max(2.5, 0.45 * Math.max(l.h, it.h)));
+    if (L) { L.items.push(it); L.h = Math.max(L.h, it.h); } else lines.push({ y: it.y, h: it.h, items: [it] });
+  });
+  return lines.map(l => {
+    l.items.sort((a, b) => a.x - b.x);
+    let s = '', end = null;
+    l.items.forEach(it => {
+      if (end !== null && it.x - end > Math.max(1.5, it.h * 0.2)) s += ' ';
+      s += it.s; end = it.x + it.w;
+    });
+    return { y: l.y, text: s.replace(/\s+/g, ' ').trim() };
+  }).filter(l => l.text).sort((a, b) => b.y - a.y);
+}
+
+/** 한 페이지를 요일 칸으로 나눠 [{dow, segs:[{mark, text, lines}]}] 로 돌려준다. */
+function pdfColumns(items) {
+  const cand = items.filter(it => {
+    const t = it.s.trim();
+    return PDF_HEADER.test(t) || ((pdfMarker(t) || {}).dow);
+  });
+  const rows = [];
+  cand.forEach(it => {
+    const r = rows.find(r => Math.abs(r.y - it.y) <= 3);
+    if (r) r.items.push(it); else rows.push({ y: it.y, items: [it] });
+  });
+  const header = rows.filter(r => new Set(r.items.map(i => Math.round(i.x / 20))).size >= 3).sort((a, b) => b.y - a.y)[0];
+  let cols;
+  if (header) {
+    cols = header.items.map(i => {
+      const t = i.s.trim();
+      const dow = (t.match(PDF_HEADER) || [])[1] || (pdfMarker(t) || {}).dow;
+      return { cx: i.x + i.w / 2, dow, items: [] };
+    }).sort((a, b) => a.cx - b.cx);
+    items.forEach(it => {
+      const cx = it.x + it.w / 2;
+      let k = cols.findIndex((c, i) => i === cols.length - 1 || cx < (c.cx + cols[i + 1].cx) / 2);
+      cols[k].items.push(it);
+    });
+  } else {
+    cols = [{ cx: 0, dow: null, items }];
+  }
+  return cols.map(c => {
+    const segs = [];
+    pdfLines(c.items).forEach(l => {
+      const mk = pdfMarker(l.text);
+      if (mk) segs.push({ mark: mk, text: l.text, lines: [] });
+      else if (segs.length) segs[segs.length - 1].lines.push(l.text);
+    });
+    return { dow: c.dow, segs };
+  });
+}
+
+function pdfPickMonth(allText, cols) {
+  const cands = [];
+  const ym = allText.match(/(20\d{2})\s*[년.\-\/]\s*(\d{1,2})\s*월/);
+  if (ym) cands.push({ y: +ym[1], m: +ym[2], bonus: 1 });
+  const mo = allText.match(/(?:^|[^\d])(\d{1,2})\s*월(?![요])/);
+  const today = new Date();
+  if (mo && +mo[1] >= 1 && +mo[1] <= 12) {
+    [today.getFullYear(), today.getFullYear() + 1, today.getFullYear() - 1].forEach((y, i) => cands.push({ y, m: +mo[1], bonus: 0.5 - i * 0.1 }));
+  }
+  for (let k = -1; k <= 2; k++) {
+    const d = new Date(today.getFullYear(), today.getMonth() + k, 1);
+    cands.push({ y: d.getFullYear(), m: d.getMonth() + 1, bonus: k === 0 || k === 1 ? 0.2 : 0 });
+  }
+  let best = null;
+  cands.forEach(c => {
+    let score = c.bonus;
+    cols.forEach(col => col.segs.forEach(sg => { if (pdfResolve(sg.mark, col.dow, c)) score++; }));
+    if (!best || score > best.score) best = { ...c, score };
+  });
+  return best;
+}
+
+/** 날짜 표시를 실제 날짜로 바꾼다. 요일이 맞지 않으면 null. */
+function pdfResolve(mark, colDow, ym) {
+  const m = mark.m || ym.m;
+  let y = ym.y;
+  if (mark.m && ym.m === 12 && mark.m === 1) y++;
+  if (mark.m && ym.m === 1 && mark.m === 12) y--;
+  const d = new Date(y, m - 1, mark.d);
+  if (d.getMonth() !== m - 1) return null;
+  const want = mark.dow || colDow;
+  if (want && DOW[d.getDay()] !== want) return null;
+  return ymd(d);
+}
+
+function pdfCellMenus(lines) {
+  const out = [];
+  let holiday = '';
+  lines.forEach(t => {
+    t = t.replace(/^[*#@♣☆★◆◇■□▶·•\-\s]+/, '').trim();
+    if (!t) return;
+    if (PDF_HOLIDAY.test(t)) { holiday = t; return; }
+    if (/^[\d.,\s()]+$/.test(t)) { if (out.length && /\d/.test(t)) out[out.length - 1] += ' ' + t; return; }
+    if (PDF_SKIP.test(t)) return;
+    out.push(t);
+  });
+  return { text: out.join('\n'), holiday };
+}
+
+async function readMenuPdf(buffer) {
+  const lib = await loadPdfJs();
+  const doc = await lib.getDocument({ data: buffer, cMapUrl: PDFJS_BASE + 'cmaps/', cMapPacked: true }).promise;
+  let allText = '';
+  const cols = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const tc = await (await doc.getPage(p)).getTextContent();
+    const items = tc.items.filter(i => i.str && i.str.trim()).map(i => ({
+      s: i.str, x: i.transform[4], y: i.transform[5], w: i.width, h: Math.abs(i.transform[3]) || i.height || 8,
+    }));
+    allText += items.map(i => i.s).join(' ') + '\n';
+    cols.push(...pdfColumns(items));
+  }
+  if (!allText.replace(/\s/g, '')) {
+    throw new Error('PDF에서 글자를 읽을 수 없습니다. 스캔한 그림 파일인 것 같아요. 한글·엑셀 원본에서 "PDF로 저장"한 파일을 올리거나, 아래 붙여넣기 칸을 이용해 주세요.');
+  }
+  const ym = pdfPickMonth(allText, cols);
+  const days = {};
+  cols.forEach(col => {
+    let cur = null, last = '';
+    col.segs.forEach(sg => {
+      const date = pdfResolve(sg.mark, col.dow, ym);
+      if (date && date > last) {
+        cur = days[date] || (days[date] = { date, lines: [] });
+        cur.lines.push(...sg.lines);
+        last = date;
+      } else if (cur) {
+        cur.lines.push(sg.text, ...sg.lines); // 날짜처럼 보였지만 아닌 줄(알레르기 번호 등)
+      }
+    });
+  });
+  const list = Object.values(days).sort((a, b) => a.date < b.date ? -1 : 1).map(d => {
+    const { text, holiday } = pdfCellMenus(d.lines);
+    return { date: d.date, text, holiday, include: !!text };
+  });
+  if (!list.length) throw new Error('식단표에서 날짜를 찾지 못했습니다. 요일(월·화·수…)과 날짜가 표시된 식단표인지 확인해 주세요.');
+  return { y: ym.y, m: ym.m, days: list };
+}
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1]);
+    r.onerror = () => rej(new Error('파일을 읽지 못했습니다.'));
+    r.readAsDataURL(file);
+  });
+}
+
+function pdfCardHTML() {
+  const imp = state.pdfImport;
+  const files = (state.admin.files || []).slice().reverse();
+  let html = `<div class="card">
+    <h2>📄 식단표 PDF 올리기</h2>
+    <p class="sub">한 달(또는 한 주) 식단표 PDF를 올리면 날짜별 메뉴와 알레르기 번호를 자동으로 읽어 옵니다. 저장 전에 아래에서 확인·수정할 수 있어요.</p>
+    <div class="row">
+      <input type="file" id="pdf-file" accept="application/pdf,.pdf" class="grow">
+      <label><input type="checkbox" id="pdf-attach" ${state.pdfAttach ? 'checked' : ''}> 원본 PDF를 선생님 공유 화면에 첨부</label>
+    </div>
+    <div id="pdf-status"></div>
+    ${files.length ? `<div class="sub" style="margin:10px 0 0">첨부된 식단표: ${files.map(f =>
+      `<a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.month.replace('-', '년 '))}월 · ${esc(f.name)}</a>`).join(' / ')}</div>` : ''}
+  </div>`;
+  if (!imp) return html;
+  const studs = approved();
+  const saved = state.admin.meals;
+  const sel = imp.days.filter(d => d.include).length;
+  html += `<div class="card" style="border-color:var(--brand)">
+    <h3>${esc(imp.fileName)} → ${imp.y}년 ${imp.m}월, ${imp.days.length}일 찾음</h3>
+    <p class="sub">메뉴 한 줄에 하나씩, 알레르기 번호는 메뉴 뒤에 적습니다(예: <code>돈육떡갈비 1.2.5.6.10</code>).
+      <span class="chip guess">추정</span>은 PDF에 번호가 없어 메뉴 이름으로 짐작한 것이니 꼭 확인하세요.</p>
+    <div class="row no-print" style="margin-bottom:8px">
+      <button class="btn sm" data-pdf="all">전체 선택</button><button class="btn sm" data-pdf="none">전체 해제</button>
+    </div>
+    ${imp.days.map((d, i) => {
+      const menus = parseMenuText(d.text);
+      const who = studs.filter(s => menus.some(m => m.allergens.some(a => s.allergens.includes(a))));
+      const exists = saved.some(m => m.date === d.date);
+      return `<div class="pdf-day ${d.include ? '' : 'off'}">
+        <div class="pdf-day-head">
+          <label><input type="checkbox" data-inc="${i}" ${d.include ? 'checked' : ''}> <b>${fmtDate(d.date)}</b></label>
+          ${exists ? '<span class="badge b-caution">기존 식단 덮어씀</span>' : ''}
+          ${d.holiday ? `<span class="badge b-mild">${esc(d.holiday)}</span>` : ''}
+          ${who.length ? `<span class="bad" style="font-size:13px">주의 ${who.length}명: ${who.map(s => esc(s.name)).join(', ')}</span>` : ''}
+        </div>
+        <div class="pdf-day-body">
+          <textarea data-txt="${i}" rows="${Math.max(3, menus.length)}">${esc(d.text)}</textarea>
+          <div>${menus.map(m => `<div style="margin-bottom:3px">${esc(m.name)} ${m.guessed ? '<span class="chip guess">추정</span>' : ''}${
+            m.allergens.length ? chips(m.allergens, who.length ? m.allergens.filter(a => who.some(s => s.allergens.includes(a))) : []) : '<span class="muted" style="font-size:13px">알레르기 없음</span>'}</div>`).join('') || '<span class="muted">메뉴 없음</span>'}</div>
+        </div>
+      </div>`;
+    }).join('')}
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="pdf-save" ${sel ? '' : 'disabled'}>선택한 ${sel}일 식단 저장</button>
+      <button class="btn" id="pdf-cancel">취소</button>
+    </div>
+  </div>`;
+  return html;
+}
+
+function wirePdf(c) {
+  $('#pdf-attach').onchange = e => { state.pdfAttach = e.target.checked; };
+  $('#pdf-file').onchange = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const status = $('#pdf-status');
+    if (file.size > 10 * 1024 * 1024) { status.innerHTML = '<div class="msg bad">10MB 이하 PDF만 올릴 수 있습니다.</div>'; return; }
+    status.innerHTML = '<div class="loading">PDF를 읽는 중…</div>';
+    try {
+      const result = await readMenuPdf(await file.arrayBuffer());
+      state.pdfImport = { ...result, fileName: file.name, base64: await fileToBase64(file) };
+      renderMeal();
+    } catch (err) {
+      status.innerHTML = `<div class="msg bad">${esc(err.message)}</div>`;
+    }
+  };
+  const imp = state.pdfImport;
+  if (!imp) return;
+  c.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => {
+    imp.days.forEach(d => { d.include = b.dataset.pdf === 'all' && !!d.text.trim(); });
+    renderMeal();
+  });
+  c.querySelectorAll('[data-inc]').forEach(cb => cb.onchange = () => { imp.days[+cb.dataset.inc].include = cb.checked; renderMeal(); });
+  c.querySelectorAll('[data-txt]').forEach(t => t.onchange = () => { imp.days[+t.dataset.txt].text = t.value; renderMeal(); });
+  $('#pdf-cancel').onclick = () => { state.pdfImport = null; renderMeal(); };
+  $('#pdf-save').onclick = async () => {
+    const chosen = imp.days.filter(d => d.include);
+    const list = chosen.map(d => ({ date: d.date, menus: parseMenuText(d.text) }));
+    const guessed = list.reduce((n, d) => n + d.menus.filter(m => m.guessed).length, 0);
+    const over = chosen.filter(d => state.admin.meals.some(m => m.date === d.date)).length;
+    const ask = [`${list.length}일 식단을 저장할까요?`];
+    if (over) ask.push(`이미 저장된 ${over}일은 새 식단으로 바뀝니다.`);
+    if (guessed) ask.push(`이름으로 추정한 메뉴가 ${guessed}개 있습니다. 알레르기 번호를 확인하셨나요?`);
+    if (!confirm(ask.join('\n'))) return;
+    const btn = $('#pdf-save'); btn.disabled = true; btn.textContent = '저장 중…';
+    try {
+      await call('saveMeals', state.adminPin, list.map(d => ({ date: d.date, menus: d.menus.map(m => ({ name: m.name, allergens: m.allergens })) })));
+      if (state.pdfAttach) await call('uploadMenuPdf', state.adminPin, `${imp.y}-${pad(imp.m)}`, imp.fileName, imp.base64);
+      state.admin = await call('getAdminData', state.adminPin);
+      state.staff = null; state.pdfImport = null; state.mealDraft = null; state.draft = null;
+      state.planDate = list[0].date; state.sub = 'plan';
+      renderAdmin();
+      toast(`${list.length}일 식단을 저장했습니다. 위험 학생을 확인하세요.`);
+    } catch (err) {
+      alert(err.message); btn.disabled = false; btn.textContent = `선택한 ${list.length}일 식단 저장`;
+    }
+  };
+}
+</script>

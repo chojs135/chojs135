@@ -1,0 +1,116 @@
+<!-- 3. 영양교사 화면: 로그인, 메뉴 전환, 학생 명단 -->
+<script>
+/* =========================================================
+   3. 영양교사 화면
+   ========================================================= */
+async function openAdmin(force) {
+  if (!state.adminPin) {
+    $('#admin-body').classList.add('hidden');
+    const box = $('#admin-login'); box.classList.remove('hidden');
+    loginBox(box, '영양교사 관리 화면', '영양교사 PIN을 입력하세요.', (p, role) => {
+      if (role !== 'admin') throw new Error('영양교사 PIN이 아닙니다.');
+      state.adminPin = p; store.set('adminPin', p); openAdmin();
+    });
+    return;
+  }
+  $('#admin-login').classList.add('hidden');
+  $('#admin-body').classList.remove('hidden');
+  if (!state.admin || force) {
+    $('#admin-content').innerHTML = '<div class="loading">불러오는 중…</div>';
+    try { state.admin = await call('getAdminData', state.adminPin); }
+    catch (err) {
+      state.adminPin = null; store.del('adminPin');
+      $('#admin-content').innerHTML = `<div class="msg bad">${esc(err.message)}</div>`;
+      setTimeout(openAdmin, 1500); return;
+    }
+  }
+  renderAdmin();
+}
+function renderAdmin() {
+  document.querySelectorAll('#admin-tabs button').forEach(b => {
+    b.classList.toggle('on', b.dataset.sub === state.sub);
+    if (b.dataset.sub === 'students') {
+      const n = state.admin ? state.admin.students.filter(s => s.status === 'pending').length : 0;
+      b.textContent = '학생 명단' + (n ? ` (승인 대기 ${n})` : '');
+    }
+  });
+  if (!state.admin) return;
+  if (state.sub === 'plan') runIf('renderPlan', '#admin-content');
+  if (state.sub === 'meal') runIf('renderMeal', '#admin-content');
+  if (state.sub === 'students') renderStudents();
+}
+async function adminSave(fn, args, okMsg, keepDraft) {
+  try {
+    await call(fn, state.adminPin, ...args);
+    state.admin = await call('getAdminData', state.adminPin);
+    state.staff = null;
+    if (!keepDraft) { state.draft = null; state.mealDraft = null; }
+    renderAdmin();
+    if (okMsg) toast(okMsg);
+  } catch (err) { alert(err.message); }
+}
+const approved = () => state.admin.students.filter(s => s.status === 'approved');
+
+/* ---- 3-3. 학생 명단 ---- */
+function renderStudents() {
+  const all = state.admin.students.slice().sort(byClass);
+  const pend = all.filter(s => s.status === 'pending');
+  const ok = all.filter(s => s.status === 'approved');
+  const rej = all.filter(s => s.status === 'rejected');
+  const row = (s, actions) => `<tr>
+    <td>${s.grade}-${s.classNo}</td><td>${s.number}</td><td><b>${esc(s.name)}</b>${sevBadges(s)}</td>
+    <td>${chips(s.allergens)}${s.memo ? `<div class="muted" style="font-size:13px">📝 ${esc(s.memo)}</div>` : ''}</td>
+    <td style="font-size:13px">${esc(s.guardian)}<br>${esc(s.contact)}</td>
+    <td style="white-space:nowrap">${actions}</td></tr>`;
+  const head = '<thead><tr><th>반</th><th>번호</th><th>이름</th><th>알레르기</th><th>보호자</th><th></th></tr></thead>';
+  $('#admin-content').innerHTML = `
+    ${pend.length ? `<div class="card" style="border-color:var(--warn)"><h3>승인 대기 ${pend.length}명</h3>
+      <p class="sub">보호자가 제출한 정보입니다. 확인 후 승인하면 위험 체크에 반영됩니다. 같은 학생이 이미 있으면 기존 정보를 삭제하거나 수정하세요.</p>
+      <div style="overflow-x:auto"><table>${head}<tbody>${pend.map(s => row(s,
+        `<button class="btn sm primary" data-act="approve" data-id="${s.id}">승인</button>
+         <button class="btn sm" data-act="edit" data-id="${s.id}">수정</button>
+         <button class="btn sm danger" data-act="reject" data-id="${s.id}">반려</button>`)).join('')}</tbody></table></div></div>` : ''}
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><h3 style="margin:0">관리 중인 학생 ${ok.length}명</h3>
+        <button class="btn primary" data-act="new">+ 학생 직접 추가</button></div>
+      <div style="overflow-x:auto"><table>${head}<tbody>${ok.map(s => row(s,
+        `<button class="btn sm" data-act="edit" data-id="${s.id}">수정</button>
+         <button class="btn sm danger" data-act="delete" data-id="${s.id}">삭제</button>`)).join('') ||
+        '<tr><td colspan="6" class="muted">아직 승인된 학생이 없습니다.</td></tr>'}</tbody></table></div>
+    </div>
+    ${rej.length ? `<div class="card"><h3 class="muted">반려 ${rej.length}명</h3><div style="overflow-x:auto"><table>${head}<tbody>${rej.map(s => row(s,
+        `<button class="btn sm" data-act="approve" data-id="${s.id}">승인</button>
+         <button class="btn sm danger" data-act="delete" data-id="${s.id}">삭제</button>`)).join('')}</tbody></table></div></div>` : ''}
+    <p class="note">새 학년이 시작되면 진급한 학생의 학년·반을 수정하거나, 보호자에게 등록 화면 링크를 다시 안내해 주세요.</p>`;
+
+  $('#admin-content').querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+    const id = b.dataset.id, act = b.dataset.act;
+    const s = all.find(x => x.id === id);
+    if (act === 'approve') adminSave('setStudentStatus', [id, 'approved'], `${s.name} 학생을 승인했습니다.`, true);
+    if (act === 'reject') confirm(`${s.name} 학생 등록을 반려할까요?`) && adminSave('setStudentStatus', [id, 'rejected'], '반려했습니다.', true);
+    if (act === 'delete') confirm(`${s.name} 학생 정보를 삭제할까요? 대체식 기록도 함께 지워집니다.`) && adminSave('deleteStudent', [id], '삭제했습니다.', true);
+    if (act === 'edit' || act === 'new') editStudent(s);
+  });
+}
+function editStudent(s) {
+  const modal = $('#modal');
+  modal.innerHTML = `<div class="card"><h2>${s ? '학생 정보 수정' : '학생 직접 추가'}</h2>
+    <form>${studentFormHTML(s || {})}
+      <div class="row" style="margin-top:14px"><button class="btn primary">저장${s && s.status === 'pending' ? ' 후 승인' : ''}</button>
+      <button class="btn" type="button" id="close-modal">닫기</button></div><div class="msgbox"></div></form></div>`;
+  modal.classList.remove('hidden');
+  $('#close-modal').onclick = () => modal.classList.add('hidden');
+  modal.querySelector('form').onsubmit = async e => {
+    e.preventDefault();
+    const data = readStudentForm(e.target);
+    try {
+      validateStudent(data);
+      if (s) data.id = s.id;
+      await call('saveStudent', state.adminPin, data);
+      if (s && s.status === 'pending') await call('setStudentStatus', state.adminPin, s.id, 'approved');
+      modal.classList.add('hidden');
+      await adminSave('login', [], '저장했습니다.', true);
+    } catch (err) { e.target.querySelector('.msgbox').innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; }
+  };
+}
+</script>

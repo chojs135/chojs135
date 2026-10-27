@@ -1,0 +1,123 @@
+<!-- 2. 선생님 공유 화면 (조회 전용) -->
+<script>
+/* =========================================================
+   2. 선생님 공유 화면 (조회 전용)
+   ========================================================= */
+async function openStaff() {
+  const pin = state.staffPin || state.adminPin;
+  if (!pin) {
+    $('#staff-body').classList.add('hidden');
+    const box = $('#staff-login'); box.classList.remove('hidden');
+    loginBox(box, '선생님 공유 화면', '교직원 PIN을 입력하면 날짜별로 알레르기 주의 학생과 대체식을 볼 수 있습니다.', (p) => {
+      state.staffPin = p; store.set('staffPin', p); openStaff();
+    });
+    return;
+  }
+  $('#staff-login').classList.add('hidden');
+  const body = $('#staff-body'); body.classList.remove('hidden');
+  const week = weekDates(state.staffDate);
+  if (!state.staff || state.staffWeek !== week[0]) {
+    body.innerHTML = '<div class="loading">불러오는 중…</div>';
+    try {
+      state.staff = await call('getStaffData', pin, week[0], week[4]);
+      state.staffWeek = week[0];
+    } catch (err) {
+      state.staffPin = null; store.del('staffPin'); state.staff = null;
+      body.innerHTML = `<div class="msg bad">${esc(err.message)}</div>`;
+      setTimeout(openStaff, 1500); return;
+    }
+  }
+  renderStaff();
+}
+
+function renderStaff() {
+  const body = $('#staff-body');
+  const { students, meals, plans } = state.staff;
+  const date = state.staffDate;
+  const week = weekDates(date);
+  const classes = [...new Set(students.map(s => `${s.grade}-${s.classNo}`))]
+    .sort((a, b) => { const [g1, c1] = a.split('-').map(Number), [g2, c2] = b.split('-').map(Number); return g1 - g2 || c1 - c2; });
+  const shown = state.filter ? students.filter(s => `${s.grade}-${s.classNo}` === state.filter || `${s.grade}` === state.filter) : students;
+  const meal = meals.find(m => m.date === date);
+  const risks = risksFor(shown, meal);
+  const pm = planMap(plans, date);
+
+  const weekHTML = week.map(d => {
+    const m = meals.find(x => x.date === d);
+    const n = m ? risksFor(shown, m).length : null;
+    return `<button data-date="${d}" class="${d === date ? 'on' : ''}"><small>${fmtDate(d)}</small>
+      <b class="${n === null ? 'zero' : n ? 'some' : 'zero'}">${n === null ? '–' : n + '명'}</b>
+      <small>${n === null ? '식단 미등록' : '주의 학생'}</small></button>`;
+  }).join('');
+
+  let pending = 0;
+  const qty = {};
+  risks.forEach(r => r.items.forEach(it => {
+    const sub = pm[planKey(it.menu, r.student.id)];
+    if (sub) qty[sub] = (qty[sub] || 0) + 1; else pending++;
+  }));
+
+  let listHTML = '';
+  if (!meal) {
+    const near = nearestMealDate(state.staff.mealDates || [], date);
+    listHTML = `<div class="card muted">이 날짜의 식단이 아직 등록되지 않았습니다.
+      ${near && near !== date ? `<button class="btn sm primary" data-go="${near}">식단이 있는 날로 이동: ${fmtDate(near)}</button>` : ''}</div>`;
+  }
+  else if (!risks.length) listHTML = '<div class="card ok">이 날은 알레르기 주의 학생이 없습니다. 🙂</div>';
+  else {
+    let cur = '';
+    risks.forEach(r => {
+      const s = r.student, cls = `${s.grade}학년 ${s.classNo}반`;
+      if (cls !== cur) { listHTML += `<div class="class-head">${cls}</div>`; cur = cls; }
+      listHTML += `<div class="stu"><div class="who">${s.number}번 ${esc(s.name)} ${sevBadges(s)}</div>
+        <ul>${r.items.map(it => {
+          const sub = pm[planKey(it.menu, s.id)];
+          return `<li><b>${esc(it.menu)}</b> ${chips(it.hits, it.hits)} →
+            ${sub ? `<span class="sub-ok">대체: ${esc(sub)}</span>` : '<span class="sub-none">대체식 준비 중</span>'}</li>`;
+        }).join('')}</ul>${s.memo ? `<div class="muted" style="font-size:13px;margin-top:4px">📝 ${esc(s.memo)}</div>` : ''}</div>`;
+    });
+  }
+
+  body.innerHTML = `
+    <div class="card no-monitor no-print">
+      <div class="row">
+        <button class="btn" data-nav="-7">◀ 지난주</button>
+        <button class="btn" data-nav="today">오늘</button>
+        <button class="btn" data-nav="7">다음주 ▶</button>
+        <select id="cls-filter" class="grow" style="max-width:200px">
+          <option value="">전체 학급</option>
+          ${[...new Set(classes.map(c => c.split('-')[0]))].map(g => `<option value="${g}" ${state.filter === g ? 'selected' : ''}>${g}학년 전체</option>`).join('')}
+          ${classes.map(c => `<option value="${c}" ${state.filter === c ? 'selected' : ''}>${c.replace('-', '학년 ')}반</option>`).join('')}
+        </select>
+        <button class="btn" onclick="setMonitor(true)">급식실 모니터</button>
+        <button class="btn" onclick="window.print()">인쇄</button>
+        <button class="btn" onclick="refreshStaff()">새로고침</button>
+      </div>
+    </div>
+    <div class="week no-monitor">${weekHTML}</div>
+    <h2 style="margin:0 0 10px">${fmtDate(date)} 알레르기 주의 현황</h2>
+    <div class="stats">
+      <div class="stat ${risks.length ? 'alert' : ''}"><b>${risks.length}</b><span>주의 학생</span></div>
+      <div class="stat"><b>${meal ? new Set(risks.flatMap(r => r.items.map(i => i.menu))).size : 0}</b><span>위험 메뉴</span></div>
+      <div class="stat ${pending ? 'alert' : ''}"><b>${pending}</b><span>대체식 미정</span></div>
+    </div>
+    ${Object.keys(qty).length ? `<div class="card"><h3>대체식 준비 수량</h3>${Object.entries(qty).map(([k, v]) =>
+      `<span class="chip" style="font-size:15px">${esc(k)} <b>${v}</b></span>`).join(' ')}</div>` : ''}
+    ${(() => { const f = (state.staff.files || []).find(f => f.month === date.slice(0, 7));
+      return f ? `<div class="card no-monitor">📎 <a href="${esc(f.url)}" target="_blank" rel="noopener">${Number(date.slice(5, 7))}월 식단표 원본 PDF 보기</a> <span class="muted" style="font-size:13px">(${esc(f.name)})</span></div>` : ''; })()}
+    ${meal ? `<div class="card"><h3>이 날 식단</h3>${meal.menus.map(m => `<div>${esc(m.name)} <span class="muted" style="font-size:13px">${m.allergens.join('.')}</span></div>`).join('')}</div>` : ''}
+    ${listHTML}
+    <p class="note">이 화면은 영양교사가 등록한 정보를 공유하는 조회 전용 화면입니다. 학생 개인정보이므로 교실 화면에 띄우거나 외부로 전달하지 마세요.</p>`;
+
+  body.querySelectorAll('.week button').forEach(b => b.onclick = () => { state.staffDate = b.dataset.date; renderStaff(); });
+  body.querySelectorAll('[data-nav]').forEach(b => b.onclick = () => {
+    const v = b.dataset.nav;
+    state.staffDate = v === 'today' ? schoolDay() : addDays(state.staffDate, +v);
+    openStaff();
+  });
+  body.querySelectorAll('[data-go]').forEach(b => b.onclick = () => { state.staffDate = b.dataset.go; openStaff(); });
+  $('#cls-filter').onchange = e => { state.filter = e.target.value; renderStaff(); };
+}
+function refreshStaff() { state.staff = null; openStaff(); }
+function setMonitor(on) { document.body.classList.toggle('monitor', on); window.scrollTo(0, 0); }
+</script>

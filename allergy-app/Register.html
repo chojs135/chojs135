@@ -1,0 +1,64 @@
+<!-- 1. 보호자 등록 화면 -->
+<script>
+/* =========================================================
+   1. 보호자 등록
+   ========================================================= */
+function studentFormHTML(s = {}) {
+  const al = s.allergens || [];
+  const opt = (n, max, v) => `<option value="">선택</option>` +
+    Array.from({ length: max }, (_, i) => `<option ${v == i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('');
+  return `
+    <div class="row3">
+      <div><label class="f">학년</label><select name="grade">${opt(0, 6, s.grade)}</select></div>
+      <div><label class="f">반</label><select name="classNo">${opt(0, 15, s.classNo)}</select></div>
+      <div><label class="f">번호</label><select name="number">${opt(0, 40, s.number)}</select></div>
+    </div>
+    <label class="f">학생 이름</label><input type="text" name="name" maxlength="20" value="${esc(s.name)}">
+    <label class="f">알레르기 식품 (해당하는 것 모두 선택)</label>
+    <div class="agrid">${Object.entries(ALLERGENS).map(([n, t]) =>
+      `<label><input type="checkbox" name="al" value="${n}" ${al.includes(+n) ? 'checked' : ''}>${n}. ${t}</label>`).join('')}</div>
+    <label class="f">반응 정도</label>
+    <div class="seg">${Object.entries(SEVERITY).map(([k, t]) =>
+      `<label><input type="radio" name="severity" value="${k}" ${(s.severity || 'caution') === k ? 'checked' : ''}>${t}</label>`).join('')}</div>
+    <p class="sub" style="margin-top:4px">가벼움: 가려움·두드러기 정도 / 주의: 병원 진료 경험 / 심각: 호흡곤란·아나필락시스 경험</p>
+    <label class="f"><input type="checkbox" name="epipen" ${s.epipen ? 'checked' : ''}> 에피펜(자가주사기)을 가지고 다녀요</label>
+    <label class="f">증상·주의사항 (선택)</label><textarea name="memo" maxlength="200" style="min-height:70px">${esc(s.memo)}</textarea>
+    <div class="row">
+      <div class="grow"><label class="f">보호자 이름</label><input type="text" name="guardian" maxlength="20" value="${esc(s.guardian)}"></div>
+      <div class="grow"><label class="f">비상 연락처</label><input type="tel" name="contact" maxlength="20" value="${esc(s.contact)}"></div>
+    </div>`;
+}
+function readStudentForm(form) {
+  const v = n => form.elements[n] ? form.elements[n].value : '';
+  return {
+    grade: +v('grade'), classNo: +v('classNo'), number: +v('number'), name: v('name').trim(),
+    allergens: [...form.querySelectorAll('input[name=al]:checked')].map(x => +x.value),
+    severity: (form.querySelector('input[name=severity]:checked') || {}).value || 'caution',
+    epipen: form.elements.epipen.checked, memo: v('memo').trim(), guardian: v('guardian').trim(), contact: v('contact').trim(),
+  };
+}
+function renderRegister() {
+  const form = $('#reg-form');
+  form.innerHTML = studentFormHTML() + `
+    <label class="f"><input type="checkbox" name="agree"> 학생 건강정보(알레르기)를 급식 안전 관리 목적으로 수집·이용하는 데 동의합니다.</label>
+    <p class="sub">수집 항목: 학생 학년·반·번호·이름, 알레르기 정보, 보호자 연락처 / 보관: 해당 학년도 종료 시까지</p>
+    <button class="btn primary" style="margin-top:6px">제출하기</button><div class="msgbox"></div>`;
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const box = form.querySelector('.msgbox');
+    if (!form.elements.agree.checked) { box.innerHTML = '<div class="msg bad">개인정보 수집·이용에 동의해 주세요.</div>'; return; }
+    const s = readStudentForm(form);
+    try {
+      validateStudent(s);
+      form.querySelector('button.primary').disabled = true;
+      await call('submitStudent', s);
+      form.innerHTML = `<div class="msg ok">제출되었습니다. 영양교사가 확인한 뒤 급식 관리에 반영됩니다.<br>
+        <b>${stuLabel(s)}</b>: ${s.allergens.map(n => ALLERGENS[n]).join(', ')}</div>
+        <button class="btn" style="margin-top:10px" type="button" onclick="renderRegister()">다른 자녀 등록하기</button>`;
+    } catch (err) {
+      box.innerHTML = `<div class="msg bad">${esc(err.message)}</div>`;
+      const b = form.querySelector('button.primary'); if (b) b.disabled = false;
+    }
+  };
+}
+</script>

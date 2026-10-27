@@ -1,8 +1,8 @@
 /**
  * 알레르기 급식 안전 알리미 - 서버(Apps Script)
  *
- * 구글 시트에 붙어 있는 Apps Script 프로젝트에 이 파일과 Index.html 을 넣고
- * 웹앱으로 배포합니다. 데이터는 이 시트의 탭 4개(students, meals, plans, files)에 저장됩니다.
+ * 구글 시트에 붙어 있는 Apps Script 프로젝트에 이 파일과 HTML 파일들(Index, Style, Register,
+ * Staff, Admin, Meal, Plan, Pdf)을 넣고 웹앱으로 배포합니다. 데이터는 이 시트의 탭 4개(students, meals, plans, files)에 저장됩니다.
  *
  * PIN 은 [프로젝트 설정 > 스크립트 속성] 의 ADMIN_PIN(영양교사), STAFF_PIN(교직원) 입니다.
  * 처음 한 번 setup() 을 실행하면 시트와 임시 PIN 이 만들어지고 실행 로그에 PIN 이 표시됩니다.
@@ -19,9 +19,18 @@ const NUMBER_FIELDS = ['grade', 'classNo', 'number'];
 const JSON_FIELDS = ['allergens', 'menus'];
 
 function doGet() {
-  return HtmlService.createHtmlOutputFromFile('Index')
+  return HtmlService.createTemplateFromFile('Index').evaluate()
     .setTitle('알레르기 급식 안전 알리미')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** Index.html 안의 <?!= include('파일이름'); ?> 자리에 그 HTML 파일 내용을 넣는다. 아직 없는 파일은 건너뛴다. */
+function include(name) {
+  try {
+    return HtmlService.createHtmlOutputFromFile(name).getContent();
+  } catch (e) {
+    return '';
+  }
 }
 
 /** 처음 한 번 실행: 시트 탭과 임시 PIN 을 만든다. */
