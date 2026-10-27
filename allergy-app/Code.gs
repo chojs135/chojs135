@@ -2,7 +2,7 @@
  * 알레르기 급식 안전 알리미 - 서버(Apps Script)
  *
  * 구글 시트에 붙어 있는 Apps Script 프로젝트에 이 파일과 Index.html 을 넣고
- * 웹앱으로 배포합니다. 데이터는 이 시트의 탭 3개(students, meals, plans)에 저장됩니다.
+ * 웹앱으로 배포합니다. 데이터는 이 시트의 탭 4개(students, meals, plans, files)에 저장됩니다.
  *
  * PIN 은 [프로젝트 설정 > 스크립트 속성] 의 ADMIN_PIN(영양교사), STAFF_PIN(교직원) 입니다.
  * 처음 한 번 setup() 을 실행하면 시트와 임시 PIN 이 만들어지고 실행 로그에 PIN 이 표시됩니다.
