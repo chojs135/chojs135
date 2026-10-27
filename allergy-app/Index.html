@@ -310,6 +310,11 @@ function risksFor(students, meal) {
                      .filter(x => x.hits.length),
   })).filter(r => r.items.length).sort((a, b) => byClass(a.student, b.student));
 }
+/** date 이후 가장 가까운 식단 날짜 (없으면 가장 최근 날짜) */
+function nearestMealDate(dates, date) {
+  const ds = dates.slice().sort();
+  return ds.find(d => d >= date) || ds[ds.length - 1] || null;
+}
 const planKey = (menu, sid) => menu + '||' + sid;
 function planMap(plans, date) {
   const m = {};
@@ -388,7 +393,7 @@ const Demo = (() => {
       return clone({
         students: d.students.filter(s => s.status === 'approved')
           .map(({ guardian, contact, ...rest }) => rest),
-        meals: d.meals.filter(inR), plans: d.plans.filter(inR), files: files.slice(),
+        meals: d.meals.filter(inR), plans: d.plans.filter(inR), files: files.slice(), mealDates: d.meals.map(m => m.date),
       });
     },
     saveStudent(pin, s) {
@@ -617,7 +622,11 @@ function renderStaff() {
   }));
 
   let listHTML = '';
-  if (!meal) listHTML = '<div class="card muted">이 날짜의 식단이 아직 등록되지 않았습니다.</div>';
+  if (!meal) {
+    const near = nearestMealDate(state.staff.mealDates || [], date);
+    listHTML = `<div class="card muted">이 날짜의 식단이 아직 등록되지 않았습니다.
+      ${near && near !== date ? `<button class="btn sm primary" data-go="${near}">식단이 있는 날로 이동: ${fmtDate(near)}</button>` : ''}</div>`;
+  }
   else if (!risks.length) listHTML = '<div class="card ok">이 날은 알레르기 주의 학생이 없습니다. 🙂</div>';
   else {
     let cur = '';
@@ -670,6 +679,7 @@ function renderStaff() {
     state.staffDate = v === 'today' ? schoolDay() : addDays(state.staffDate, +v);
     openStaff();
   });
+  body.querySelectorAll('[data-go]').forEach(b => b.onclick = () => { state.staffDate = b.dataset.go; openStaff(); });
   $('#cls-filter').onchange = e => { state.filter = e.target.value; renderStaff(); };
 }
 function refreshStaff() { state.staff = null; openStaff(); }
@@ -800,7 +810,10 @@ function renderPlan() {
     </div></div>
     <div class="week">${weekHTML}</div>
     <h2 style="margin:0 0 10px">${fmtDate(date)} 위험 체크</h2>
-    ${!meal ? `<div class="card">이 날짜의 식단이 없습니다. <button class="btn sm primary" onclick="state.sub='meal';state.mealDate='${date}';renderAdmin()">식단 입력하러 가기</button></div>`
+    ${!meal ? `<div class="card">이 날짜의 식단이 없습니다.
+      ${(() => { const n = nearestMealDate(meals.map(m => m.date), date);
+        return n && n !== date ? `<button class="btn sm primary" onclick="state.planDate='${n}';renderPlan()">식단이 있는 날로 이동: ${fmtDate(n)}</button>` : ''; })()}
+      <button class="btn sm" onclick="state.sub='meal';state.mealDate='${date}';renderAdmin()">식단 입력하러 가기</button></div>`
       : !risks.length ? '<div class="card ok">등록된 학생 중 이 날 위험 메뉴가 있는 학생이 없습니다. 🙂</div>'
       : cards + `
       <div class="card"><h3>대체식 준비 수량</h3>${Object.keys(qty).length ? Object.entries(qty).map(([k, v]) =>
@@ -1136,6 +1149,18 @@ function wirePdf(c) {
   };
 }
 
+/** 저장된 식단을 달별로 보여 주고, 날짜를 누르면 그 날 식단을 연다. */
+function savedMealsHTML(cur) {
+  const byMonth = {};
+  state.admin.meals.forEach(m => (byMonth[m.date.slice(0, 7)] = byMonth[m.date.slice(0, 7)] || []).push(m.date));
+  const months = Object.keys(byMonth).sort().slice(-3);
+  if (!months.length) return '';
+  return `<div class="card"><h3>저장된 식단</h3>
+    <p class="sub">날짜를 누르면 그 날 식단을 보고 고칠 수 있습니다.</p>
+    ${months.map(mo => `<div style="margin-bottom:8px"><b>${Number(mo.slice(5))}월</b> <span class="muted">(${byMonth[mo].length}일)</span><br>
+      ${byMonth[mo].sort().map(d => `<button class="cand ${d === cur ? 'safe' : ''}" style="margin:3px 2px" data-meal-date="${d}">${fmtDate(d).replace(/^\d+월 /, '')}</button>`).join('')}</div>`).join('')}
+  </div>`;
+}
 function renderMeal() {
   const date = state.mealDate;
   const saved = state.admin.meals.find(m => m.date === date);
@@ -1145,7 +1170,7 @@ function renderMeal() {
   }
   const rows = state.mealDraft;
   const studs = approved();
-  $('#admin-content').innerHTML = pdfCardHTML() + `
+  $('#admin-content').innerHTML = pdfCardHTML() + savedMealsHTML(date) + `
     <div class="card">
       <h2>직접 입력·붙여넣기</h2>
       <p class="sub">NEIS 식단표를 복사해 붙여넣으면 메뉴 옆 알레르기 번호를 자동으로 읽습니다. 번호가 없는 메뉴는 이름으로 추정하니 꼭 확인하세요.</p>
@@ -1181,6 +1206,7 @@ function renderMeal() {
 
   const c = $('#admin-content');
   wirePdf(c);
+  c.querySelectorAll('[data-meal-date]').forEach(b => b.onclick = () => { state.mealDate = b.dataset.mealDate; renderMeal(); });
   $('#meal-date').onchange = e => { if (e.target.value) { state.mealDate = e.target.value; renderMeal(); } };
   c.querySelectorAll('[data-nav]').forEach(b => b.onclick = () => { state.mealDate = addDays(state.mealDate, +b.dataset.nav); renderMeal(); });
   const parse = replace => {

@@ -66,8 +66,9 @@ function getStaffData(pin, from, to) {
     .filter(s => s.status === 'approved')
     .map(s => ({ id: s.id, grade: s.grade, classNo: s.classNo, number: s.number, name: s.name,
                  allergens: s.allergens, severity: s.severity, epipen: s.epipen, memo: s.memo }));
-  return { students: students, meals: rows_('meals').filter(inRange), plans: rows_('plans').filter(inRange),
-           files: rows_('files') };
+  const meals = rows_('meals');
+  return { students: students, meals: meals.filter(inRange), plans: rows_('plans').filter(inRange),
+           files: rows_('files'), mealDates: meals.map(m => m.date) };
 }
 
 function saveStudent(pin, data) {
