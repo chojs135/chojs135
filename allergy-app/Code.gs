@@ -13,6 +13,7 @@ const SHEETS = {
              'memo', 'guardian', 'contact', 'status', 'createdAt', 'updatedAt'],
   meals: ['date', 'menus', 'updatedAt'],
   plans: ['date', 'menu', 'studentId', 'substitute', 'updatedAt'],
+  files: ['month', 'name', 'url', 'fileId', 'uploadedAt'],
 };
 const NUMBER_FIELDS = ['grade', 'classNo', 'number'];
 const JSON_FIELDS = ['allergens', 'menus'];
@@ -54,7 +55,7 @@ function submitStudent(data) {
 
 function getAdminData(pin) {
   needAdmin_(pin);
-  return { students: rows_('students'), meals: rows_('meals'), plans: rows_('plans') };
+  return { students: rows_('students'), meals: rows_('meals'), plans: rows_('plans'), files: rows_('files') };
 }
 
 /** 교직원 공유 화면: 승인된 학생(보호자 연락처 제외) + 기간 내 식단·대체식. */
@@ -65,7 +66,8 @@ function getStaffData(pin, from, to) {
     .filter(s => s.status === 'approved')
     .map(s => ({ id: s.id, grade: s.grade, classNo: s.classNo, number: s.number, name: s.name,
                  allergens: s.allergens, severity: s.severity, epipen: s.epipen, memo: s.memo }));
-  return { students: students, meals: rows_('meals').filter(inRange), plans: rows_('plans').filter(inRange) };
+  return { students: students, meals: rows_('meals').filter(inRange), plans: rows_('plans').filter(inRange),
+           files: rows_('files') };
 }
 
 function saveStudent(pin, data) {
@@ -109,18 +111,65 @@ function deleteStudent(pin, id) {
 }
 
 function saveMeal(pin, date, menus) {
+  return saveMeals(pin, [{ date: date, menus: menus }]);
+}
+
+/** 여러 날짜 식단을 한 번에 저장 (PDF 식단표 가져오기). 메뉴가 비어 있으면 그 날 식단을 지운다. */
+function saveMeals(pin, list) {
   needAdmin_(pin);
-  checkDate_(date);
-  const clean = (menus || [])
-    .map(m => ({ name: String(m.name || '').trim(), allergens: cleanAllergens_(m.allergens) }))
-    .filter(m => m.name);
+  const clean = (list || []).map(d => {
+    checkDate_(d.date);
+    return {
+      date: d.date,
+      menus: (d.menus || [])
+        .map(m => ({ name: String(m.name || '').trim().slice(0, 40), allergens: cleanAllergens_(m.allergens) }))
+        .filter(m => m.name),
+    };
+  });
+  const dates = clean.map(d => d.date);
+  const now = stamp_();
   return withLock_(() => {
-    const all = rows_('meals').filter(r => r.date !== date);
-    if (clean.length) all.push({ date: date, menus: clean, updatedAt: stamp_() });
+    const all = rows_('meals').filter(r => dates.indexOf(r.date) < 0);
+    clean.forEach(d => { if (d.menus.length) all.push({ date: d.date, menus: d.menus, updatedAt: now }); });
     all.sort((a, b) => a.date < b.date ? -1 : 1);
     writeAll_('meals', all);
-    return true;
+    return clean.length;
   });
+}
+
+/** 식단표 원본 PDF 를 드라이브에 저장하고 선생님 화면에서 열 수 있게 링크를 남긴다. 같은 달은 덮어쓴다. */
+function uploadMenuPdf(pin, month, name, base64) {
+  needAdmin_(pin);
+  if (!/^\d{4}-\d{2}$/.test(String(month))) throw new Error('월 형식이 올바르지 않습니다.');
+  const bytes = Utilities.base64Decode(base64);
+  if (bytes.length > 10 * 1024 * 1024) throw new Error('PDF 파일은 10MB 이하만 올릴 수 있습니다.');
+  const safeName = String(name || '식단표.pdf').replace(/[\\/:*?"<>|]/g, '_').slice(0, 80);
+  const file = menuFolder_().createFile(Utilities.newBlob(bytes, 'application/pdf', safeName));
+  // 식단표는 공개 정보라 링크로 열람 가능하게 둔다 (학교 계정 정책상 안 되면 학교 안에서만)
+  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); }
+  catch (e) { try { file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); } catch (e2) {} }
+  return withLock_(() => {
+    const all = rows_('files');
+    all.filter(r => r.month === month).forEach(r => {
+      try { DriveApp.getFileById(r.fileId).setTrashed(true); } catch (e) {}
+    });
+    const rest = all.filter(r => r.month !== month);
+    rest.push({ month: month, name: safeName, url: file.getUrl(), fileId: file.getId(), uploadedAt: stamp_() });
+    rest.sort((a, b) => a.month < b.month ? -1 : 1);
+    writeAll_('files', rest);
+    return file.getUrl();
+  });
+}
+
+function menuFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('MENU_FOLDER_ID');
+  if (id) {
+    try { return DriveApp.getFolderById(id); } catch (e) {}
+  }
+  const folder = DriveApp.createFolder('알레르기 급식 알리미 - 식단표');
+  props.setProperty('MENU_FOLDER_ID', folder.getId());
+  return folder;
 }
 
 /** 해당 날짜의 대체식 계획을 통째로 바꾼다. */
@@ -216,7 +265,7 @@ function rows_(name) {
       const o = {};
       headers.forEach((h, i) => {
         let v = r[i];
-        if (v instanceof Date) v = Utilities.formatDate(v, tz, h === 'date' ? 'yyyy-MM-dd' : 'yyyy-MM-dd HH:mm:ss');
+        if (v instanceof Date) v = Utilities.formatDate(v, tz, h === 'date' ? 'yyyy-MM-dd' : h === 'month' ? 'yyyy-MM' : 'yyyy-MM-dd HH:mm:ss');
         if (NUMBER_FIELDS.indexOf(h) >= 0) v = Number(v);
         else if (JSON_FIELDS.indexOf(h) >= 0) v = v ? JSON.parse(v) : [];
         else v = String(v);
